@@ -1,0 +1,56 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.hostsmith/mcp-server",
+  "description": "MCP server for the Hostsmith hosting platform. Manage sites, domains, and deploy files from any MCP client.",
+  "version": "0.0.1",
+  "repository": {
+    "url": "https://github.com/hostsmith/mcp-server",
+    "source": "github"
+  },
+  "websiteUrl": "https://hostsmith.net/docs/developers/mcp",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@hostsmith/mcp-server",
+      "version": "0.0.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HOSTSMITH_PARTITION",
+          "description": "Default data partition: 'us' (United States) or 'eu' (European Union).",
+          "default": "us",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HOSTSMITH_URL",
+          "description": "Hostsmith app URL (OAuth endpoints).",
+          "default": "https://hostsmith.net",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HOSTSMITH_API_DOMAIN",
+          "description": "Override the upstream API domain across both partitions; 'us.api.' and 'eu.api.' are prepended to this value.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "HOSTSMITH_BASE_URL",
+          "description": "Override the API base URL for a single partition (ignores HOSTSMITH_PARTITION).",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.hostsmith.net/mcp"
+    }
+  ]
+}

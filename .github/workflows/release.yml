@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.semver.outputs.tag }}
+      released: ${{ steps.semver.outputs.released }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Semver Release
+        id: semver
+        uses: huggingface/semver-release-action@1a164868d29fb12acd39d70e8e47326db9d78ad2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: [release]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Set version from release tag
+        run: |
+          VERSION="${{ needs.release.outputs.tag }}"
+          npm version "$VERSION" --no-git-tag-version
+          # Keep server.json version in sync with package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const sj = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+            sj.version = pkg.version;
+            for (const p of sj.packages || []) p.version = pkg.version;
+            fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\n');
+          "
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Upload tarball to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TARBALL=$(ls *.tgz)
+          TAG="${{ needs.release.outputs.tag }}"
+          NOTES=$(printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\nOr from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```' "${TAG#v}" "${{ github.repository }}" "$TAG" "$TARBALL")
+          gh release edit "$TAG" --notes "$NOTES"
+          gh release upload "$TAG" "$TARBALL"
+
+  # Publishes @hostsmith/mcp-server to npm using GitHub OIDC (npm Trusted Publisher).
+  # No NPM_TOKEN secret is used - authentication is via the id-token below
+  # plus the Trusted Publisher configuration on npmjs.com for this package.
+  publish-npm:
+    needs: [release, build]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+
+      - run: npm ci
+
+      - name: Set version from release tag
+        run: npm version "${{ needs.release.outputs.tag }}" --no-git-tag-version
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - run: npm publish --provenance --access public
