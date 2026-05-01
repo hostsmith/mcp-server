@@ -1,7 +1,4 @@
-#!/usr/bin/env node
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
@@ -13,23 +10,16 @@ import type { Partition } from "@hostsmith/sdk";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, posix, basename } from "node:path";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
 import { z } from "zod";
 import express from "express";
 import { readFileSync } from "node:fs";
 
-const PKG_VERSION: string = (() => {
+export const PKG_VERSION: string = (() => {
   // Resolve package.json relative to the compiled dist/ or source src/ dir
   const pkgPath = new URL("../package.json", import.meta.url);
   const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
   return pkg.version;
 })();
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const HOSTSMITH_URL = process.env.HOSTSMITH_URL ?? "https://hostsmith.net";
 
 const ALL_PARTITIONS: Partition[] = ["us", "eu"];
 
@@ -99,10 +89,6 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   return JSON.parse(payload);
 }
 
-// ---------------------------------------------------------------------------
-// Resolve access token: from authInfo (HTTP/OAuth) or env var (stdio)
-// ---------------------------------------------------------------------------
-
 function getToken(extra: { authInfo?: AuthInfo }): string {
   if (extra.authInfo?.token) return extra.authInfo.token;
   const envToken = process.env.HOSTSMITH_ACCESS_TOKEN;
@@ -112,11 +98,7 @@ function getToken(extra: { authInfo?: AuthInfo }): string {
   );
 }
 
-// ---------------------------------------------------------------------------
-// MCP server & tools
-// ---------------------------------------------------------------------------
-
-function buildServer(): McpServer {
+export function buildServer(): McpServer {
   const server = new McpServer({
     name: "hostsmith",
     version: PKG_VERSION,
@@ -406,30 +388,28 @@ function buildServer(): McpServer {
   return server;
 }
 
-// ---------------------------------------------------------------------------
-// Stdio transport (local usage with HOSTSMITH_ACCESS_TOKEN env var)
-// ---------------------------------------------------------------------------
-
-async function startStdio(): Promise<void> {
-  const server = buildServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+export interface CreateAppOptions {
+  /** Hostsmith app URL providing the OAuth endpoints (e.g. "https://hostsmith.net"). */
+  hostsmithUrl: string;
+  /** Public URL where this MCP server is reachable (e.g. "https://mcp.hostsmith.net"). */
+  mcpBaseUrl: string;
 }
 
-// ---------------------------------------------------------------------------
-// HTTP transport with OAuth (remote/hosted usage)
-// ---------------------------------------------------------------------------
-
-async function startHttp(): Promise<void> {
-  const port = parseInt(process.env.PORT ?? "3100", 10);
-  const baseUrl = process.env.MCP_BASE_URL ?? `http://localhost:${port}`;
+/**
+ * Build a configured Express app exposing the Hostsmith MCP HTTP transport.
+ *
+ * Callers (CLI, Lambda wrapper, etc.) supply configuration explicitly. The
+ * factory does not read process.env — env-derived defaults belong in callers.
+ */
+export function createApp(opts: CreateAppOptions): express.Express {
+  const { hostsmithUrl, mcpBaseUrl } = opts;
 
   const provider = new ProxyOAuthServerProvider({
     endpoints: {
-      authorizationUrl: `${HOSTSMITH_URL}/api/oauth/authorize`,
-      tokenUrl: `${HOSTSMITH_URL}/api/oauth/token`,
-      registrationUrl: `${HOSTSMITH_URL}/api/oauth/register`,
-      revocationUrl: `${HOSTSMITH_URL}/api/oauth/revoke`,
+      authorizationUrl: `${hostsmithUrl}/api/oauth/authorize`,
+      tokenUrl: `${hostsmithUrl}/api/oauth/token`,
+      registrationUrl: `${hostsmithUrl}/api/oauth/register`,
+      revocationUrl: `${hostsmithUrl}/api/oauth/revoke`,
     },
     verifyAccessToken: async (token: string): Promise<AuthInfo> => {
       const claims = decodeJwtPayload(token);
@@ -445,7 +425,7 @@ async function startHttp(): Promise<void> {
     ): Promise<OAuthClientInformationFull | undefined> => {
       try {
         const res = await fetch(
-          `${HOSTSMITH_URL}/api/oauth/client-info?client_id=${encodeURIComponent(clientId)}`,
+          `${hostsmithUrl}/api/oauth/client-info?client_id=${encodeURIComponent(clientId)}`,
         );
         if (!res.ok) return undefined;
         return (await res.json()) as OAuthClientInformationFull;
@@ -460,8 +440,8 @@ async function startHttp(): Promise<void> {
   app.use(
     mcpAuthRouter({
       provider,
-      issuerUrl: new URL(HOSTSMITH_URL),
-      baseUrl: new URL(baseUrl),
+      issuerUrl: new URL(hostsmithUrl),
+      baseUrl: new URL(mcpBaseUrl),
       scopesSupported: ["sites:read", "sites:write", "domains:read", "files:write", "account:read"],
       serviceDocumentationUrl: new URL(
         "https://hostsmith.net/docs/developers/authentication",
@@ -471,7 +451,7 @@ async function startHttp(): Promise<void> {
 
   const bearerAuth = requireBearerAuth({
     verifier: provider,
-    resourceMetadataUrl: `${baseUrl}/.well-known/oauth-protected-resource`,
+    resourceMetadataUrl: `${mcpBaseUrl}/.well-known/oauth-protected-resource`,
   });
 
   // Session management for stateful transport
@@ -525,26 +505,5 @@ async function startHttp(): Promise<void> {
     await transport.handleRequest(req, res);
   });
 
-  const httpServer = createServer(app);
-  httpServer.listen(port, () => {
-    console.log(`Hostsmith MCP server listening on ${baseUrl}/mcp`);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Entrypoint
-// ---------------------------------------------------------------------------
-
-const mode = process.argv[2] ?? process.env.MCP_TRANSPORT ?? "stdio";
-
-if (mode === "http") {
-  startHttp().catch((err) => {
-    console.error("Fatal:", err);
-    process.exit(1);
-  });
-} else {
-  startStdio().catch((err) => {
-    console.error("Fatal:", err);
-    process.exit(1);
-  });
+  return app;
 }

@@ -28,7 +28,8 @@ Common commands:
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run build       # tsc -> dist/
-npm run dev         # tsx --env-file=.env src/index.ts http
+npm run smoke       # build, import createApp, start on a free port, hit the discovery doc
+npm run dev         # tsx --env-file=.env src/cli.ts http
 ```
 
 To exercise the server end-to-end, point an MCP client (Claude Desktop, `@modelcontextprotocol/inspector`) at your local build per the README's "Local with access token (stdio)" section.
