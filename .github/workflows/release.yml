@@ -27,10 +27,20 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       released: ${{ steps.tag.outputs.released }}
     steps:
+      # Mint a short-lived GitHub App installation token. Required so the
+      # bump commit pushed below triggers downstream workflows (CI on the
+      # PR branch, tag-push handler). The default GITHUB_TOKEN is blocked
+      # from triggering other workflows by GitHub's anti-recursion rule.
+      - id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Short-circuit on tag push
         if: github.ref_type == 'tag'
