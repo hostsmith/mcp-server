@@ -453,9 +453,15 @@ export function createFetchHandler(
 
   app.get("/.well-known/oauth-protected-resource", (c) => c.json(protectedResourceMetadata));
 
-  // Session map for stateful Streamable HTTP transport. Each session ID maps
-  // to a transport bound to a single MCP server instance.
-  const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
+  // One transport, one server, connected once. The SDK's web-standard
+  // transport multiplexes multiple MCP sessions internally; creating a
+  // fresh transport per request would discard the per-session state and
+  // produce "Server not initialized" on subsequent tool calls.
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+  const server = buildServer();
+  const ready = server.connect(transport);
 
   function readAuthInfo(authorization: string | undefined): AuthInfo | Response {
     if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
@@ -480,49 +486,10 @@ export function createFetchHandler(
     };
   }
 
-  app.post("/mcp", async (c) => {
+  app.all("/mcp", async (c) => {
     const auth = readAuthInfo(c.req.header("authorization"));
     if (auth instanceof Response) return auth;
-
-    const sessionId = c.req.header("mcp-session-id");
-    const existing = sessionId ? transports.get(sessionId) : undefined;
-    if (existing) {
-      return existing.handleRequest(c.req.raw, { authInfo: auth });
-    }
-
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-    transport.onclose = () => {
-      if (transport.sessionId) transports.delete(transport.sessionId);
-    };
-
-    const server = buildServer();
-    await server.connect(transport);
-    const response = await transport.handleRequest(c.req.raw, { authInfo: auth });
-    if (transport.sessionId) transports.set(transport.sessionId, transport);
-    return response;
-  });
-
-  app.get("/mcp", async (c) => {
-    const auth = readAuthInfo(c.req.header("authorization"));
-    if (auth instanceof Response) return auth;
-    const sessionId = c.req.header("mcp-session-id");
-    const transport = sessionId ? transports.get(sessionId) : undefined;
-    if (!transport) {
-      return c.json({ error: "Invalid or missing session ID" }, 400);
-    }
-    return transport.handleRequest(c.req.raw, { authInfo: auth });
-  });
-
-  app.delete("/mcp", async (c) => {
-    const auth = readAuthInfo(c.req.header("authorization"));
-    if (auth instanceof Response) return auth;
-    const sessionId = c.req.header("mcp-session-id");
-    const transport = sessionId ? transports.get(sessionId) : undefined;
-    if (!transport) {
-      return c.json({ error: "Invalid or missing session ID" }, 400);
-    }
+    await ready;
     return transport.handleRequest(c.req.raw, { authInfo: auth });
   });
 
