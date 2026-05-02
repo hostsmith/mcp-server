@@ -3,11 +3,16 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
+  # Stable releases on push to main (1.0.4, 1.0.5, ...) under npm dist-tag 'latest'.
+  # Pre-releases on workflow_dispatch from any branch (X.Y.Z-rc.N) under dist-tag
+  # 'rc'. The 'rc' identifier is shared across all branches, so the counter
+  # increments globally regardless of which branch you dispatch from.
   release:
     runs-on: ubuntu-latest
     outputs:
@@ -18,9 +23,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Compute branches config
+        id: branches
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == "main" ]]; then
+              echo "Refusing to publish a prerelease from main; use a feature branch." >&2
+              exit 1
+            fi
+            echo "value=[\"main\", { \"name\": \"$REF\", \"prerelease\": \"rc\" }]" >> "$GITHUB_OUTPUT"
+          else
+            echo 'value=["main"]' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Semver Release
         id: semver
         uses: huggingface/semver-release-action@1a164868d29fb12acd39d70e8e47326db9d78ad2
+        with:
+          branches: ${{ steps.branches.outputs.value }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -69,8 +90,8 @@ jobs:
           gh release upload "$TAG" "$TARBALL"
 
   # Publishes @hostsmith/mcp-server to npm using GitHub OIDC (npm Trusted Publisher).
-  # No NPM_TOKEN secret is used - authentication is via the id-token below
-  # plus the Trusted Publisher configuration on npmjs.com for this package.
+  # Stable tags (vX.Y.Z) publish under 'latest'. Prerelease tags (vX.Y.Z-*)
+  # publish under 'rc' so they don't override the default install target.
   publish-npm:
     needs: [release, build]
     if: needs.release.outputs.released == 'true'
@@ -95,4 +116,14 @@ jobs:
 
       - run: npm run build
 
-      - run: npm publish --provenance --access public
+      - name: Determine npm dist-tag
+        id: disttag
+        run: |
+          TAG="${{ needs.release.outputs.tag }}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "tag=rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm publish --provenance --access public --tag ${{ steps.disttag.outputs.tag }}
