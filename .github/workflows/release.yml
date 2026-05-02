@@ -22,6 +22,13 @@ jobs:
   # A pushed tag (manual cut) short-circuits the bump and goes straight
   # to build + publish.
   release:
+    # Skip when the triggering push is the bot's own version-bump commit
+    # to avoid re-running the workflow on the bump (which would either
+    # no-op or, on tag pushes, double-publish).
+    if: >-
+      github.event_name != 'push' ||
+      github.ref_type == 'tag' ||
+      !startsWith(github.event.head_commit.message, 'chore(version):')
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
@@ -88,9 +95,22 @@ jobs:
       - name: Push commit + tag
         if: github.ref_type != 'tag' && steps.tag.outputs.released == 'true'
         run: |
-          git push origin "HEAD:${{ github.ref_name }}"
-          git push origin "${{ steps.tag.outputs.tag }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # rc: push only the tag - the chore(version) commit stays an
+            # orphan, reachable solely via the tag, so the feature branch
+            # isn't polluted with the bot's bump commit.
+            git push origin "${{ steps.tag.outputs.tag }}"
+          else
+            # stable on main: push branch + tag so chore(version)
+            # commits remain in main's history.
+            git push origin "HEAD:${{ github.ref_name }}"
+            git push origin "${{ steps.tag.outputs.tag }}"
+          fi
 
+  # Build + publish run in-band in the same workflow run that pushed the
+  # tag (whether dispatched, push-to-main, or triggered by a manual tag
+  # push). Pushes from GITHUB_TOKEN don't retrigger workflows, so no
+  # double-fire from our own tag pushes.
   build:
     needs: [release]
     if: needs.release.outputs.released == 'true'
