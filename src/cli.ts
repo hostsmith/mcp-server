@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createServer } from "node:http";
-import { buildServer, createApp } from "./index.js";
+import { serve } from "@hono/node-server";
+import { buildServer, createFetchHandler } from "./index.js";
 
 async function startStdio(): Promise<void> {
   const server = buildServer();
@@ -15,10 +15,9 @@ async function startHttp(): Promise<void> {
   const hostsmithUrl = process.env.HOSTSMITH_URL ?? "https://hostsmith.net";
   const mcpBaseUrl = process.env.MCP_BASE_URL ?? `http://localhost:${port}`;
 
-  const app = createApp({ hostsmithUrl, mcpBaseUrl });
+  const handler = createFetchHandler({ hostsmithUrl, mcpBaseUrl });
 
-  const httpServer = createServer(app);
-  httpServer.listen(port, () => {
+  serve({ fetch: handler, port }, () => {
     console.log(`Hostsmith MCP server listening on ${mcpBaseUrl}/mcp`);
   });
 }
