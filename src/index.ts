@@ -453,15 +453,13 @@ export function createFetchHandler(
 
   app.get("/.well-known/oauth-protected-resource", (c) => c.json(protectedResourceMetadata));
 
-  // One transport, one server, connected once. The SDK's web-standard
-  // transport multiplexes multiple MCP sessions internally; creating a
-  // fresh transport per request would discard the per-session state and
-  // produce "Server not initialized" on subsequent tool calls.
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-  const server = buildServer();
-  const ready = server.connect(transport);
+  // Stateful Streamable HTTP: one transport instance per MCP session, one
+  // McpServer connected to each. The SDK transport tracks a single session
+  // per instance, so we keep a Map keyed by session ID. Registration uses
+  // the onsessioninitialized callback (not a post-handleRequest set) so the
+  // map is populated before the response headers flush — otherwise the
+  // client's next request can race past the registration.
+  const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
 
   function readAuthInfo(authorization: string | undefined): AuthInfo | Response {
     if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
@@ -489,7 +487,31 @@ export function createFetchHandler(
   app.all("/mcp", async (c) => {
     const auth = readAuthInfo(c.req.header("authorization"));
     if (auth instanceof Response) return auth;
-    await ready;
+
+    const sessionId = c.req.header("mcp-session-id");
+    const existing = sessionId ? transports.get(sessionId) : undefined;
+    if (existing) {
+      return existing.handleRequest(c.req.raw, { authInfo: auth });
+    }
+
+    // No matching session: this must be a fresh initialize. Spin up a new
+    // transport + server pair and register via onsessioninitialized so the
+    // map entry exists before the initialize response headers flush.
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sid) => {
+        transports.set(sid, transport);
+      },
+      onsessionclosed: (sid) => {
+        transports.delete(sid);
+      },
+    });
+    transport.onclose = () => {
+      if (transport.sessionId) transports.delete(transport.sessionId);
+    };
+
+    const server = buildServer();
+    await server.connect(transport);
     return transport.handleRequest(c.req.raw, { authInfo: auth });
   });
 
