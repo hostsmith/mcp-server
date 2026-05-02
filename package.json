@@ -1,6 +1,6 @@
 {
   "name": "@hostsmith/mcp-server",
-  "version": "1.0.4-rc.14",
+  "version": "1.0.4-rc.18",
   "description": "MCP server for the Hostsmith hosting platform",
   "license": "MIT",
   "type": "module",

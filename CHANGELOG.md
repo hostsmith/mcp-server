@@ -2,6 +2,31 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.0.4-rc.18 - 2026-05-02
+#### Continuous Integration
+- switch cog to gh app - (33ab8f3) - gp42-ops (GitHub)
+
+- - -
+
+## v1.0.4-rc.14 - 2026-05-02
+#### Continuous Integration
+- switch cog to gh app - (fe6d4de) - gp42-ops (GitHub)
+#### Miscellaneous Chores
+- (**version**) v1.0.4-rc.14 - (1fb595e) - github-actions[bot]
+
+- - -
+
+## v1.0.4-rc.12 - 2026-05-02
+#### Bug Fixes
+- bump sdk version - (c80fc6a) - Gennady Potapov
+#### Continuous Integration
+- migrate workflows to cog - (024fa08) - Gennady Potapov
+- manual rc dispatch - (b0f436e) - Gennady Potapov
+#### Miscellaneous Chores
+- (**version**) v1.0.4-rc.12 - (1c19c20) - github-actions[bot]
+
+- - -
+
 ## v1.0.4-rc.14 - 2026-05-02
 #### Continuous Integration
 - switch cog to gh app - (fe6d4de) - gp42-ops (GitHub)
