@@ -37,11 +37,22 @@ jobs:
             echo 'value=["main"]' >> "$GITHUB_OUTPUT"
           fi
 
+      # The action bundles the angular preset, which by default only honors a
+      # "BREAKING CHANGE:" footer. We pass a custom breakingHeaderPattern so
+      # the parser also promotes the "!" shorthand (e.g. "feat!: ...") to a
+      # major bump without requiring a footer.
       - name: Semver Release
         id: semver
         uses: huggingface/semver-release-action@1a164868d29fb12acd39d70e8e47326db9d78ad2
         with:
           branches: ${{ steps.branches.outputs.value }}
+          commitAnalyzerPluginOpts: |
+            {
+              "parserOpts": {
+                "noteKeywords": ["BREAKING CHANGE", "BREAKING-CHANGE", "BREAKING CHANGES"],
+                "breakingHeaderPattern": "^(\\w*)(?:\\(([^)]*)\\))?!: (.*)$"
+              }
+            }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,8 +96,10 @@ jobs:
         run: |
           TARBALL=$(ls *.tgz)
           TAG="${{ needs.release.outputs.tag }}"
-          NOTES=$(printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\nOr from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```' "${TAG#v}" "${{ github.repository }}" "$TAG" "$TARBALL")
-          gh release edit "$TAG" --notes "$NOTES"
+          INSTALL=$(printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\nOr from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```\n\n---\n\n' "${TAG#v}" "${{ github.repository }}" "$TAG" "$TARBALL")
+          EXISTING=$(gh release view "$TAG" --json body --jq .body)
+          printf '%s%s' "$INSTALL" "$EXISTING" > release-notes.md
+          gh release edit "$TAG" --notes-file release-notes.md
           gh release upload "$TAG" "$TARBALL"
 
   # Publishes @hostsmith/mcp-server to npm using GitHub OIDC (npm Trusted Publisher).
