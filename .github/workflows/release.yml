@@ -92,20 +92,13 @@ jobs:
             fi
           fi
 
-      - name: Push commit + tag
+      - name: Push tag
         if: github.ref_type != 'tag' && steps.tag.outputs.released == 'true'
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # rc: push only the tag - the chore(version) commit stays an
-            # orphan, reachable solely via the tag, so the feature branch
-            # isn't polluted with the bot's bump commit.
-            git push origin "${{ steps.tag.outputs.tag }}"
-          else
-            # stable on main: push branch + tag so chore(version)
-            # commits remain in main's history.
-            git push origin "HEAD:${{ github.ref_name }}"
-            git push origin "${{ steps.tag.outputs.tag }}"
-          fi
+        # Push only the tag - cog doesn't create a bump commit
+        # (disable_bump_commit), so the tag points at the existing
+        # branch HEAD. No writes to the branch, branch protection
+        # untouched, history clean.
+        run: git push origin "${{ steps.tag.outputs.tag }}"
 
   # Build + publish run in-band in the same workflow run that pushed the
   # tag (whether dispatched, push-to-main, or triggered by a manual tag
@@ -126,6 +119,20 @@ jobs:
           node-version: 22
 
       - run: npm ci
+
+      - name: Stamp version from tag
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          node -e "
+            const fs = require('fs');
+            const sj = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+            sj.version = '$VERSION';
+            for (const p of sj.packages || []) p.version = '$VERSION';
+            fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\n');
+          "
 
       - run: npm run typecheck
 
@@ -182,6 +189,20 @@ jobs:
           registry-url: https://registry.npmjs.org/
 
       - run: npm ci
+
+      - name: Stamp version from tag
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          node -e "
+            const fs = require('fs');
+            const sj = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+            sj.version = '$VERSION';
+            for (const p of sj.packages || []) p.version = '$VERSION';
+            fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\n');
+          "
 
       - run: npm run typecheck
 
