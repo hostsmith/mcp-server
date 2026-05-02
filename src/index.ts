@@ -1,17 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { ProxyOAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/providers/proxyProvider.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { Hostsmith, ApiError } from "@hostsmith/sdk";
 import type { Partition } from "@hostsmith/sdk";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, posix, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import express from "express";
+import { Hono } from "hono";
 import { readFileSync } from "node:fs";
 
 export const PKG_VERSION: string = (() => {
@@ -388,122 +384,147 @@ export function buildServer(): McpServer {
   return server;
 }
 
-export interface CreateAppOptions {
+/** Supported OAuth scopes for the Hostsmith MCP server. */
+export const OAUTH_SCOPES = [
+  "sites:read",
+  "sites:write",
+  "domains:read",
+  "files:write",
+  "account:read",
+] as const;
+
+export interface MetadataOptions {
+  /** Public URL where this MCP server is reachable (e.g. "https://mcp.hostsmith.net"). */
+  mcpBaseUrl: string;
+  /** Hostsmith app URL acting as the OAuth authorization server. */
+  hostsmithUrl: string;
+}
+
+/**
+ * RFC 9728 protected-resource metadata. Mount the result at
+ * `/.well-known/oauth-protected-resource` from the consumer side.
+ */
+export function getProtectedResourceMetadata(opts: MetadataOptions) {
+  return {
+    resource: opts.mcpBaseUrl,
+    authorization_servers: [opts.hostsmithUrl],
+    scopes_supported: [...OAUTH_SCOPES],
+    resource_documentation: "https://hostsmith.net/docs/developers/authentication",
+  };
+}
+
+export interface CreateFetchHandlerOptions {
   /** Hostsmith app URL providing the OAuth endpoints (e.g. "https://hostsmith.net"). */
   hostsmithUrl: string;
   /** Public URL where this MCP server is reachable (e.g. "https://mcp.hostsmith.net"). */
   mcpBaseUrl: string;
 }
 
+function buildBearerError(mcpBaseUrl: string, error: string, status = 401): Response {
+  return new Response(JSON.stringify({ error }), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "www-authenticate": `Bearer resource_metadata="${mcpBaseUrl}/.well-known/oauth-protected-resource"`,
+    },
+  });
+}
+
 /**
- * Build a configured Express app exposing the Hostsmith MCP HTTP transport.
+ * Build a Web-Standard fetch handler exposing the Hostsmith MCP HTTP transport.
  *
  * Callers (CLI, Lambda wrapper, etc.) supply configuration explicitly. The
  * factory does not read process.env — env-derived defaults belong in callers.
+ *
+ * Mounts:
+ *   - GET /.well-known/oauth-protected-resource  (RFC 9728 metadata)
+ *   - POST/GET/DELETE /mcp                       (Streamable HTTP transport)
+ *
+ * Auth-server metadata (RFC 8414) is NOT served here; clients fetch it from
+ * the issuer host (`hostsmithUrl`) directly.
  */
-export function createApp(opts: CreateAppOptions): express.Express {
+export function createFetchHandler(
+  opts: CreateFetchHandlerOptions,
+): (req: Request) => Promise<Response> {
   const { hostsmithUrl, mcpBaseUrl } = opts;
 
-  const provider = new ProxyOAuthServerProvider({
-    endpoints: {
-      authorizationUrl: `${hostsmithUrl}/api/oauth/authorize`,
-      tokenUrl: `${hostsmithUrl}/api/oauth/token`,
-      registrationUrl: `${hostsmithUrl}/api/oauth/register`,
-      revocationUrl: `${hostsmithUrl}/api/oauth/revoke`,
-    },
-    verifyAccessToken: async (token: string): Promise<AuthInfo> => {
-      const claims = decodeJwtPayload(token);
-      return {
-        token,
-        clientId: (claims.client_id as string) ?? "",
-        scopes: ((claims.scope as string) ?? "").split(" ").filter(Boolean),
-        expiresAt: claims.exp as number | undefined,
-      };
-    },
-    getClient: async (
-      clientId: string,
-    ): Promise<OAuthClientInformationFull | undefined> => {
-      try {
-        const res = await fetch(
-          `${hostsmithUrl}/api/oauth/client-info?client_id=${encodeURIComponent(clientId)}`,
-        );
-        if (!res.ok) return undefined;
-        return (await res.json()) as OAuthClientInformationFull;
-      } catch {
-        return undefined;
-      }
-    },
-  });
+  const app = new Hono();
+  const protectedResourceMetadata = getProtectedResourceMetadata({ mcpBaseUrl, hostsmithUrl });
 
-  const app = express();
+  app.get("/.well-known/oauth-protected-resource", (c) => c.json(protectedResourceMetadata));
 
-  app.use(
-    mcpAuthRouter({
-      provider,
-      issuerUrl: new URL(hostsmithUrl),
-      baseUrl: new URL(mcpBaseUrl),
-      scopesSupported: ["sites:read", "sites:write", "domains:read", "files:write", "account:read"],
-      serviceDocumentationUrl: new URL(
-        "https://hostsmith.net/docs/developers/authentication",
-      ),
-    }),
-  );
+  // Session map for stateful Streamable HTTP transport. Each session ID maps
+  // to a transport bound to a single MCP server instance.
+  const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
 
-  const bearerAuth = requireBearerAuth({
-    verifier: provider,
-    resourceMetadataUrl: `${mcpBaseUrl}/.well-known/oauth-protected-resource`,
-  });
+  function readAuthInfo(authorization: string | undefined): AuthInfo | Response {
+    if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
+      return buildBearerError(mcpBaseUrl, "unauthorized");
+    }
+    const token = authorization.slice("bearer ".length).trim();
+    let claims: Record<string, unknown>;
+    try {
+      claims = decodeJwtPayload(token);
+    } catch {
+      return buildBearerError(mcpBaseUrl, "invalid_token");
+    }
+    const exp = claims.exp as number | undefined;
+    if (exp && exp * 1000 < Date.now()) {
+      return buildBearerError(mcpBaseUrl, "token_expired");
+    }
+    return {
+      token,
+      clientId: (claims.client_id as string) ?? "",
+      scopes: ((claims.scope as string) ?? "").split(" ").filter(Boolean),
+      expiresAt: exp,
+    };
+  }
 
-  // Session management for stateful transport
-  const transports = new Map<string, StreamableHTTPServerTransport>();
+  app.post("/mcp", async (c) => {
+    const auth = readAuthInfo(c.req.header("authorization"));
+    if (auth instanceof Response) return auth;
 
-  app.post("/mcp", bearerAuth, async (req, res) => {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-    if (sessionId && transports.has(sessionId)) {
-      const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res, req.body);
-      return;
+    const sessionId = c.req.header("mcp-session-id");
+    const existing = sessionId ? transports.get(sessionId) : undefined;
+    if (existing) {
+      return existing.handleRequest(c.req.raw, { authInfo: auth });
     }
 
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
     });
-
     transport.onclose = () => {
-      if (transport.sessionId) {
-        transports.delete(transport.sessionId);
-      }
+      if (transport.sessionId) transports.delete(transport.sessionId);
     };
 
     const server = buildServer();
     await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-
-    if (transport.sessionId) {
-      transports.set(transport.sessionId, transport);
-    }
+    const response = await transport.handleRequest(c.req.raw, { authInfo: auth });
+    if (transport.sessionId) transports.set(transport.sessionId, transport);
+    return response;
   });
 
-  app.get("/mcp", bearerAuth, async (req, res) => {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !transports.has(sessionId)) {
-      res.status(400).json({ error: "Invalid or missing session ID" });
-      return;
+  app.get("/mcp", async (c) => {
+    const auth = readAuthInfo(c.req.header("authorization"));
+    if (auth instanceof Response) return auth;
+    const sessionId = c.req.header("mcp-session-id");
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      return c.json({ error: "Invalid or missing session ID" }, 400);
     }
-    const transport = transports.get(sessionId)!;
-    await transport.handleRequest(req, res);
+    return transport.handleRequest(c.req.raw, { authInfo: auth });
   });
 
-  app.delete("/mcp", bearerAuth, async (req, res) => {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !transports.has(sessionId)) {
-      res.status(400).json({ error: "Invalid or missing session ID" });
-      return;
+  app.delete("/mcp", async (c) => {
+    const auth = readAuthInfo(c.req.header("authorization"));
+    if (auth instanceof Response) return auth;
+    const sessionId = c.req.header("mcp-session-id");
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      return c.json({ error: "Invalid or missing session ID" }, 400);
     }
-    const transport = transports.get(sessionId)!;
-    await transport.handleRequest(req, res);
+    return transport.handleRequest(c.req.raw, { authInfo: auth });
   });
 
-  return app;
+  return async (req: Request) => app.fetch(req);
 }
