@@ -3,28 +3,43 @@ name: Release
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # Stable releases on push to main (1.0.4, 1.0.5, ...) under npm dist-tag 'latest'.
-  # Pre-releases on workflow_dispatch from any branch (X.Y.Z-rc.N) under dist-tag
-  # 'rc'. The 'rc' identifier is shared across all branches, so the counter
-  # increments globally regardless of which branch you dispatch from.
+  # Stable releases on push to main under npm dist-tag 'latest'.
+  # Pre-releases on workflow_dispatch from any non-main branch
+  # (X.Y.Z-rc.N) under dist-tag 'rc'. cog computes the next version
+  # from conventional commits, updates package.json + server.json +
+  # CHANGELOG.md, commits "chore(version): X.Y.Z", and tags vX.Y.Z.
+  # A pushed tag (manual cut) short-circuits the bump and goes straight
+  # to build + publish.
   release:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.semver.outputs.tag }}
-      released: ${{ steps.semver.outputs.released }}
+      tag: ${{ steps.tag.outputs.tag }}
+      released: ${{ steps.tag.outputs.released }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute branches config
-        id: branches
+      - name: Short-circuit on tag push
+        if: github.ref_type == 'tag'
+        id: tagpush
+        run: echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: Compute bump args
+        if: github.ref_type != 'tag'
+        id: args
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             REF="${{ github.ref_name }}"
@@ -32,29 +47,49 @@ jobs:
               echo "Refusing to publish a prerelease from main; use a feature branch." >&2
               exit 1
             fi
-            echo "value=[\"main\", { \"name\": \"$REF\", \"prerelease\": \"rc\" }]" >> "$GITHUB_OUTPUT"
+            echo "value=--auto --pre rc.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           else
-            echo 'value=["main"]' >> "$GITHUB_OUTPUT"
+            echo "value=--auto" >> "$GITHUB_OUTPUT"
           fi
 
-      # The action bundles the angular preset, which by default only honors a
-      # "BREAKING CHANGE:" footer. We pass a custom breakingHeaderPattern so
-      # the parser also promotes the "!" shorthand (e.g. "feat!: ...") to a
-      # major bump without requiring a footer.
-      - name: Semver Release
-        id: semver
-        uses: huggingface/semver-release-action@1a164868d29fb12acd39d70e8e47326db9d78ad2
+      - name: Capture pre-bump tag
+        if: github.ref_type != 'tag'
+        id: before
+        run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo '')" >> "$GITHUB_OUTPUT"
+
+      - name: Bump
+        if: github.ref_type != 'tag'
+        id: bump
+        uses: cocogitto/cocogitto-action@9a9fe03b31c47444290c0d7f9b1ee1b44ee13f20 # v4.1.0
+        continue-on-error: true
         with:
-          branches: ${{ steps.branches.outputs.value }}
-          commitAnalyzerPluginOpts: |
-            {
-              "parserOpts": {
-                "noteKeywords": ["BREAKING CHANGE", "BREAKING-CHANGE", "BREAKING CHANGES"],
-                "breakingHeaderPattern": "^(\\w*)(?:\\(([^)]*)\\))?!: (.*)$"
-              }
-            }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          command: bump
+          args: ${{ steps.args.outputs.value }}
+          git-user: github-actions[bot]
+          git-user-email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Resolve tag + released flag
+        id: tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            AFTER=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [[ -z "$AFTER" || "$AFTER" == "${{ steps.before.outputs.tag }}" ]]; then
+              echo "released=false" >> "$GITHUB_OUTPUT"
+              echo "No releasable commits since '${{ steps.before.outputs.tag }}'"
+            else
+              echo "released=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$AFTER" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Push commit + tag
+        if: github.ref_type != 'tag' && steps.tag.outputs.released == 'true'
+        run: |
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "${{ steps.tag.outputs.tag }}"
 
   build:
     needs: [release]
@@ -62,26 +97,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - run: npm ci
-
-      - name: Set version from release tag
-        run: |
-          VERSION="${{ needs.release.outputs.tag }}"
-          npm version "$VERSION" --no-git-tag-version
-          # Keep server.json version in sync with package.json
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            const sj = JSON.parse(fs.readFileSync('server.json', 'utf8'));
-            sj.version = pkg.version;
-            for (const p of sj.packages || []) p.version = pkg.version;
-            fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\n');
-          "
 
       - run: npm run typecheck
 
@@ -90,17 +114,32 @@ jobs:
       - name: Pack tarball
         run: npm pack
 
-      - name: Upload tarball to release
+      - name: Generate changelog for this tag
+        id: changelog
+        uses: cocogitto/cocogitto-action@9a9fe03b31c47444290c0d7f9b1ee1b44ee13f20 # v4.1.0
+        with:
+          command: changelog
+          args: --at ${{ needs.release.outputs.tag }}
+
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TARBALL=$(ls *.tgz)
           TAG="${{ needs.release.outputs.tag }}"
-          INSTALL=$(printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\nOr from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```\n\n---\n\n' "${TAG#v}" "${{ github.repository }}" "$TAG" "$TARBALL")
-          EXISTING=$(gh release view "$TAG" --json body --jq .body)
-          printf '%s%s' "$INSTALL" "$EXISTING" > release-notes.md
-          gh release edit "$TAG" --notes-file release-notes.md
-          gh release upload "$TAG" "$TARBALL"
+          TARBALL=$(ls *.tgz)
+          {
+            printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\n' "${TAG#v}"
+            printf 'Or from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```\n\n---\n\n' "${{ github.repository }}" "$TAG" "$TARBALL"
+            cat <<'CHANGELOG'
+          ${{ steps.changelog.outputs.stdout }}
+          CHANGELOG
+          } > release-notes.md
+          PRERELEASE=""
+          if [[ "$TAG" == *-* ]]; then PRERELEASE="--prerelease"; fi
+          gh release create "$TAG" "$TARBALL" \
+            $PRERELEASE \
+            --title "$TAG" \
+            --notes-file release-notes.md
 
   # Publishes @hostsmith/mcp-server to npm using GitHub OIDC (npm Trusted Publisher).
   # Stable tags (vX.Y.Z) publish under 'latest'. Prerelease tags (vX.Y.Z-*)
@@ -114,6 +153,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -121,9 +162,6 @@ jobs:
           registry-url: https://registry.npmjs.org/
 
       - run: npm ci
-
-      - name: Set version from release tag
-        run: npm version "${{ needs.release.outputs.tag }}" --no-git-tag-version
 
       - run: npm run typecheck
 

@@ -1,0 +1,15 @@
+tag_prefix = "v"
+ignore_merge_commits = true
+
+# Keep package.json + server.json versions in sync with the bumped tag.
+pre_bump_hooks = [
+  "npm version --no-git-tag-version --allow-same-version {{version}}",
+  """node -e "const fs=require('fs'); const sj=JSON.parse(fs.readFileSync('server.json','utf8')); sj.version='{{version}}'; for (const p of sj.packages || []) p.version='{{version}}'; fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\\n');" """,
+  "git add server.json",
+]
+
+[changelog]
+path = "CHANGELOG.md"
+remote = "github.com"
+owner = "hostsmith"
+repository = "mcp-server"
