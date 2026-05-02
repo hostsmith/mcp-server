@@ -5,7 +5,6 @@ import { Hostsmith, ApiError } from "@hostsmith/sdk";
 import type { Partition } from "@hostsmith/sdk";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, posix, basename } from "node:path";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
@@ -453,14 +452,6 @@ export function createFetchHandler(
 
   app.get("/.well-known/oauth-protected-resource", (c) => c.json(protectedResourceMetadata));
 
-  // Stateful Streamable HTTP: one transport instance per MCP session, one
-  // McpServer connected to each. The SDK transport tracks a single session
-  // per instance, so we keep a Map keyed by session ID. Registration uses
-  // the onsessioninitialized callback (not a post-handleRequest set) so the
-  // map is populated before the response headers flush — otherwise the
-  // client's next request can race past the registration.
-  const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
-
   function readAuthInfo(authorization: string | undefined): AuthInfo | Response {
     if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
       return buildBearerError(mcpBaseUrl, "unauthorized");
@@ -484,32 +475,22 @@ export function createFetchHandler(
     };
   }
 
+  // Stateless mode: every request stands alone. No session ID is generated
+  // or tracked, so this works correctly across Lambda containers and other
+  // ephemeral runtimes where a per-process session map would lose entries.
+  // Trade-off: the server-initiated SSE channel on `GET /mcp` is unavailable
+  // (no session to attach to), and tools that rely on per-session state
+  // would need to be rebuilt. The current Hostsmith tools are pure
+  // request/response, so neither limitation matters today. Re-enable
+  // sessions when adding streaming-progress or sampling flows, paired with
+  // an external session store.
   app.all("/mcp", async (c) => {
     const auth = readAuthInfo(c.req.header("authorization"));
     if (auth instanceof Response) return auth;
 
-    const sessionId = c.req.header("mcp-session-id");
-    const existing = sessionId ? transports.get(sessionId) : undefined;
-    if (existing) {
-      return existing.handleRequest(c.req.raw, { authInfo: auth });
-    }
-
-    // No matching session: this must be a fresh initialize. Spin up a new
-    // transport + server pair and register via onsessioninitialized so the
-    // map entry exists before the initialize response headers flush.
     const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sid) => {
-        transports.set(sid, transport);
-      },
-      onsessionclosed: (sid) => {
-        transports.delete(sid);
-      },
+      sessionIdGenerator: undefined,
     });
-    transport.onclose = () => {
-      if (transport.sessionId) transports.delete(transport.sessionId);
-    };
-
     const server = buildServer();
     await server.connect(transport);
     return transport.handleRequest(c.req.raw, { authInfo: auth });
