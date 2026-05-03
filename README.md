@@ -61,20 +61,19 @@ npx @hostsmith/mcp-server http
 
 ## Environment variables
 
-| Variable               | Default                  | Description                                                                                                                                        |
-| ---------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HOSTSMITH_PARTITION`  | `us`                     | Default data partition: `us` (United States) or `eu` (European Union).                                                                             |
-| `HOSTSMITH_URL`        | `https://hostsmith.net`  | Hostsmith app URL (OAuth endpoints).                                                                                                               |
+| Variable               | Default                  | Description                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HOSTSMITH_URL`        | `https://hostsmith.net`  | Hostsmith app URL (OAuth endpoints).                                                                                                                                                                                                                                                                                              |
 | `HOSTSMITH_API_DOMAIN` | -                        | Override the upstream API domain across both partitions. The server prepends `us.api.` and `eu.api.` to the value you set. Example: `HOSTSMITH_API_DOMAIN=staging.example.com` routes calls to `https://us.api.staging.example.com` and `https://eu.api.staging.example.com`. Use this to point at a staging or proxied API host. |
-| `HOSTSMITH_BASE_URL`   | -                        | Override the API base URL for a single partition (ignores `HOSTSMITH_PARTITION`).                                                                  |
-| `PORT`                 | `3100`                   | HTTP server port.                                                                                                                                  |
-| `MCP_BASE_URL`         | `http://localhost:$PORT` | Public URL of the MCP server, used in OAuth metadata.                                                                                              |
+| `HOSTSMITH_BASE_URL`   | -                        | Override the API base URL with a single fixed value, bypassing partition selection entirely.                                                                                                                                                                                                                                       |
+| `PORT`                 | `3100`                   | HTTP server port.                                                                                                                                                                                                                                                                                                                 |
+| `MCP_BASE_URL`         | `http://localhost:$PORT` | Public URL of the MCP server, used in OAuth metadata.                                                                                                                                                                                                                                                                             |
 
 ## Troubleshooting
 
 - **Tool calls return 401**: the OAuth session expired. Reconnect from your MCP client to re-authorize.
 - **OAuth redirect loops**: confirm `MCP_BASE_URL` matches the URL your MCP client uses to reach the server.
-- **Wrong partition**: tool calls accept an explicit `partition` arg; if you omit it, the server uses `HOSTSMITH_PARTITION`.
+- **Wrong partition**: tool calls accept an explicit `partition` arg; if you omit it, the partition is inferred from your access token.
 - **Inspect the install**: `npx @modelcontextprotocol/inspector npx -y @hostsmith/mcp-server http` to browse tools interactively.
 
 ## Documentation
