@@ -37,15 +37,16 @@ function partitionUrlsFromEnv(): Partial<Record<Partition, string>> | undefined 
 }
 
 function createClient(token: string, partition?: Partition): Hostsmith {
-  const p = partition ?? (process.env.HOSTSMITH_PARTITION as Partition) ?? "us";
   const baseUrl = process.env.HOSTSMITH_BASE_URL;
   if (baseUrl) {
     return new Hostsmith({ accessToken: token, baseUrl });
   }
+  // When `partition` is omitted, the SDK infers it from the access
+  // token's `homePartition` claim.
   const partitionUrls = partitionUrlsFromEnv();
   return new Hostsmith({
     accessToken: token,
-    partition: p,
+    ...(partition ? { partition } : {}),
     ...(partitionUrls ? { partitionUrls } : {}),
   });
 }
@@ -101,12 +102,26 @@ export function buildServer(): McpServer {
 
   server.tool(
     "list_sites",
-    "List all sites in your Hostsmith account in a given data partition (us or eu).",
-    { partition: partitionSchema },
+    "List Hostsmith sites in your account. Use when the user asks what they have hosted, or before creating/deploying to find an existing site. Returns each site's `siteId`, `subdomain`, `domain`, and current status — feed `siteId` into `get_site`, `deploy_path`, `deploy_files`, or `delete_site`. By default queries all data partitions and merges the results; pass `partition: \"us\"` or `\"eu\"` to limit the query.",
+    {
+      partition: partitionSchema
+        .optional()
+        .describe('Filter by data partition. Omit to query all partitions.'),
+    },
     async ({ partition }, extra) => {
       try {
-        const client = createClient(getToken(extra), partition);
-        const { sites } = await client.sites.list();
+        const token = getToken(extra);
+        const partitions: Partition[] = partition ? [partition] : ALL_PARTITIONS;
+
+        const results = await Promise.all(
+          partitions.map(async (p) => {
+            const client = createClient(token, p);
+            const { sites } = await client.sites.list();
+            return sites;
+          }),
+        );
+
+        const sites = results.flat();
         return {
           content: [{ type: "text", text: JSON.stringify(sites, null, 2) }],
         };
@@ -121,7 +136,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     "list_domains",
-    "List available domains. Returns shared hosting domains (available to all) and custom domains owned by your organization. When partition is omitted, queries all data partitions and merges results. Use the shared filter to narrow results. Each domain includes `canonicalServedUrl` (the URL where the site is actually served - for apex-enabled domains this is `https://www.<apex>` because the bare apex 301-redirects via apex-link) and `bareApexCovered` (whether the bare apex form is reachable; true only when `enableApexDomain` is true).",
+    "List domains the user can host sites under. Returns shared hosting domains (e.g. `hostsmith.link`, available to everyone) and custom domains owned by the user's organization. Use this to pick a `domain` value before calling `create_site`. By default queries all partitions and merges; pass `partition` or `shared` to narrow.",
     {
       partition: partitionSchema
         .optional()
@@ -160,7 +175,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_account",
-    "Get account info including organization details, subscription plan with limits, and usage counts aggregated across all data partitions.",
+    "Get the user's account: organization details, current subscription plan with its limits (max sites, max domains, storage, bandwidth), and current usage counts. Use to check how much headroom the user has before creating new sites or to confirm plan-tier features. Usage is summed across all partitions.",
     {},
     async (_params, extra) => {
       try {
@@ -196,10 +211,12 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_site",
-    "Get details of a specific site in a given data partition",
+    "Get full details of a specific Hostsmith site by ID, including its public URL (`https://<subdomain>.<domain>`), current deployment status, and configuration. Use after `list_sites` to inspect a single site, or after `deploy_path` / `deploy_files` to confirm the site is live and grab the URL to share with the user. Defaults to the user's home partition; pass `partition` explicitly when the site lives in a different one (visible in `list_sites` output).",
     {
-      siteId: z.string().describe("The site ID"),
-      partition: partitionSchema,
+      siteId: z.string().describe("The site ID returned by `list_sites` or `create_site`."),
+      partition: partitionSchema
+        .optional()
+        .describe("Data partition the site lives in. Omit to use the user's home partition."),
     },
     async ({ siteId, partition }, extra) => {
       try {
@@ -219,18 +236,20 @@ export function buildServer(): McpServer {
 
   server.tool(
     "create_site",
-    "Create a new site on Hostsmith in a specific data partition (us or eu)",
+    "Create a new Hostsmith site and return its `siteId`, full URL, and configuration. Use when the user wants to publish or host new content and no suitable site exists yet (check `list_sites` first if unsure). After creation, deploy content with `deploy_path` (local file or folder) or `deploy_files` (inline content). Pick the parent domain from `list_domains`; pass `partition: \"eu\"` for European data residency, otherwise defaults to the user's home partition.",
     {
       domain: z
         .string()
         .describe(
-          'The domain for the site (e.g. "us.hostsmith.link" or "eu.hostsmith.link")',
+          'Parent domain for the site, e.g. "us.hostsmith.link", "eu.hostsmith.link", or a custom domain from `list_domains`.',
         ),
       subdomain: z
         .string()
         .optional()
-        .describe('Optional subdomain (auto-generated if omitted). To create a site at the apex of an apex-enabled custom domain, pass `subdomain: "www"` — the canonical served hostname for any apex domain is `www.<apex>` (the bare apex itself is served via apex-link redirect to the www form).'),
-      partition: partitionSchema,
+        .describe('Subdomain prefix; auto-generated if omitted. To create a site at the apex of an apex-enabled custom domain, pass `subdomain: "www"` (the bare apex serves via redirect to the www form).'),
+      partition: partitionSchema
+        .optional()
+        .describe("Data partition for the new site. Omit to use the user's home partition."),
     },
     async ({ domain, subdomain, partition }, extra) => {
       try {
@@ -250,17 +269,41 @@ export function buildServer(): McpServer {
 
   server.tool(
     "delete_site",
-    "Delete a site from Hostsmith. Pass the data partition the site lives in.",
+    "Permanently delete a Hostsmith site and all of its deployed files. **Destructive — only call after explicit user confirmation.** The site URL becomes unreachable immediately and the content cannot be recovered. The user must pass `confirm: true` for the deletion to proceed; otherwise the call returns an error explaining the safeguard.",
     {
-      siteId: z.string().describe("The site ID to delete"),
-      partition: partitionSchema,
+      siteId: z.string().describe("The site ID to delete (from `list_sites` or `get_site`)."),
+      confirm: z
+        .boolean()
+        .optional()
+        .describe("Must be `true` to actually perform the deletion. Required safeguard — confirm with the user before passing it."),
+      partition: partitionSchema
+        .optional()
+        .describe("Data partition the site lives in. Omit to use the user's home partition."),
     },
-    async ({ siteId, partition }, extra) => {
+    async ({ siteId, confirm, partition }, extra) => {
+      if (!confirm) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Refusing to delete site ${siteId}: confirmation required. Confirm with the user that they want to permanently delete this site and its content, then call again with confirm: true.`,
+            },
+          ],
+          isError: true,
+        };
+      }
       try {
         const client = createClient(getToken(extra), partition);
-        const result = await client.sites.delete(siteId);
+        const site = await client.sites.get(siteId);
+        const url = `https://${site.subdomain}.${site.domain}`;
+        await client.sites.delete(siteId);
         return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [
+            {
+              type: "text",
+              text: `Deleted site ${siteId} (${url}). The URL is no longer reachable and content cannot be recovered.`,
+            },
+          ],
         };
       } catch (err) {
         return {
@@ -273,13 +316,15 @@ export function buildServer(): McpServer {
 
   server.tool(
     "deploy_path",
-    "Deploy a local file or directory to a Hostsmith site. If path is a file, uploads that single file. If path is a directory, reads all files recursively and uploads them. For large directories, consider compressing to a zip first.",
+    "Publish a local file or folder to a Hostsmith site at a public HTTPS URL. Use when the user wants to share or deploy something they have on disk (HTML, PDF, image, static-site folder). Returns the live URL on success. The site must already exist — call `create_site` first if you do not have a `siteId`. For folders larger than 50 files, zip first.",
     {
-      siteId: z.string().describe("The site ID to deploy to"),
+      siteId: z.string().describe("The site ID to deploy to (from `list_sites` or `create_site`)."),
       path: z
         .string()
-        .describe("Absolute path to a file or directory to deploy"),
-      partition: partitionSchema,
+        .describe("Absolute path to a local file or directory to deploy."),
+      partition: partitionSchema
+        .optional()
+        .describe("Data partition the site lives in. Omit to use the user's home partition."),
     },
     async ({ siteId, path: path, partition }, extra) => {
       try {
@@ -340,20 +385,22 @@ export function buildServer(): McpServer {
 
   server.tool(
     "deploy_files",
-    "Deploy inline file contents to a Hostsmith site. Useful for deploying generated content without writing to disk.",
+    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist — call `create_site` first if you do not have a `siteId`.",
     {
-      siteId: z.string().describe("The site ID to deploy to"),
+      siteId: z.string().describe("The site ID to deploy to (from `list_sites` or `create_site`)."),
       files: z
         .array(
           z.object({
             fileName: z
               .string()
-              .describe("File path relative to site root (e.g. index.html)"),
-            content: z.string().describe("The file content as a string"),
+              .describe("File path relative to site root (e.g. `index.html`, `assets/style.css`)."),
+            content: z.string().describe("The file content as a string."),
           }),
         )
-        .describe("Array of files to deploy"),
-      partition: partitionSchema,
+        .describe("Files to deploy. For an HTML site, include an `index.html` as the entry point; otherwise any single file (PDF, image, JSON, etc.) works on its own."),
+      partition: partitionSchema
+        .optional()
+        .describe("Data partition the site lives in. Omit to use the user's home partition."),
     },
     async ({ siteId, files, partition }, extra) => {
       try {

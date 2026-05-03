@@ -19,13 +19,6 @@
       },
       "environmentVariables": [
         {
-          "name": "HOSTSMITH_PARTITION",
-          "description": "Default data partition: 'us' (United States) or 'eu' (European Union).",
-          "default": "us",
-          "isRequired": false,
-          "isSecret": false
-        },
-        {
           "name": "HOSTSMITH_URL",
           "description": "Hostsmith app URL (OAuth endpoints).",
           "default": "https://hostsmith.net",
@@ -40,7 +33,7 @@
         },
         {
           "name": "HOSTSMITH_BASE_URL",
-          "description": "Override the API base URL for a single partition (ignores HOSTSMITH_PARTITION).",
+          "description": "Override the API base URL with a single fixed value, bypassing partition selection entirely.",
           "isRequired": false,
           "isSecret": false
         }
