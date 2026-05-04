@@ -6,7 +6,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-0a7bbb.svg)](https://modelcontextprotocol.io)
 
-Official [Model Context Protocol](https://modelcontextprotocol.io) server for the [Hostsmith](https://hostsmith.net) hosting platform. Manage sites and deploy files from any MCP client.
+Official [Model Context Protocol](https://modelcontextprotocol.io) server for the [Hostsmith](https://hostsmith.net) hosting platform.
+
+**Static hosting for agents - give it a file, get a live URL.** Claude Code shipping an HTML report. Cursor previewing a generated demo. Claude Desktop publishing a one-pager. One MCP call → public HTTPS URL in seconds. No repo, no CI, no build step. Custom domains, private sites, EU or US data residency.
+
+![Deploy a page from Claude Code and get a live URL](./demo.gif)
+
+### Why Hostsmith
+
+- **Artifact-first.** No repo, no build config - drop a file (or have the agent generate one), get a URL.
+- **Built for agents.** MCP-native, OAuth-scoped, structured tool descriptions agents can chain.
+- **EU or US data residency.** Pick where the user's data lives, architecturally - not via a checkbox.
 
 ## Tools
 
@@ -25,9 +35,36 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 
 Authentication is via OAuth 2.0. Static access tokens are not supported.
 
-### Remote (hosted)
+### Claude Desktop
 
-Add the hosted server to your MCP client:
+Open **Settings → Connectors → Add custom connector** and enter:
+
+```
+https://mcp.hostsmith.net/mcp
+```
+
+Claude Desktop runs the OAuth flow in your browser to authorize the connector against your Hostsmith account.
+
+### Stdio (Claude Code, Cursor, Cline, Windsurf, Zed)
+
+Add this entry to your MCP client's config:
+
+```json
+{
+  "mcpServers": {
+    "hostsmith": {
+      "command": "npx",
+      "args": ["-y", "@hostsmith/mcp-server"]
+    }
+  }
+}
+```
+
+The first tool call triggers an OAuth flow in your browser to authorize the server against your Hostsmith account.
+
+### Remote URL (other clients)
+
+Any MCP client that supports remote Streamable HTTP transport can point directly at the hosted server:
 
 ```json
 {
@@ -41,7 +78,7 @@ Add the hosted server to your MCP client:
 
 The client handles the OAuth flow automatically - you'll be redirected to Hostsmith to authorize access.
 
-### Local (self-hosted)
+### Local HTTP (self-hosted)
 
 Run the server in HTTP mode and have your MCP client perform OAuth against it:
 
@@ -65,7 +102,7 @@ npx @hostsmith/mcp-server http
 | ---------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HOSTSMITH_URL`        | `https://hostsmith.net`  | Hostsmith app URL (OAuth endpoints).                                                                                                                                                                                                                                                                                              |
 | `HOSTSMITH_API_DOMAIN` | -                        | Override the upstream API domain across both partitions. The server prepends `us.api.` and `eu.api.` to the value you set. Example: `HOSTSMITH_API_DOMAIN=staging.example.com` routes calls to `https://us.api.staging.example.com` and `https://eu.api.staging.example.com`. Use this to point at a staging or proxied API host. |
-| `HOSTSMITH_BASE_URL`   | -                        | Override the API base URL with a single fixed value, bypassing partition selection entirely.                                                                                                                                                                                                                                       |
+| `HOSTSMITH_BASE_URL`   | -                        | Override the API base URL with a single fixed value, bypassing partition selection entirely.                                                                                                                                                                                                                                      |
 | `PORT`                 | `3100`                   | HTTP server port.                                                                                                                                                                                                                                                                                                                 |
 | `MCP_BASE_URL`         | `http://localhost:$PORT` | Public URL of the MCP server, used in OAuth metadata.                                                                                                                                                                                                                                                                             |
 
