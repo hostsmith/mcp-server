@@ -1,5 +1,18 @@
 name: Release
 
+# Stable release: push to main → cog computes next version, runs pre_bump_hooks
+# (stamps package.json + server.json, updates CHANGELOG.md), creates a single
+# bump commit + tag, then CI pushes both to main using a GitHub App token.
+# The retriggered workflow run sees head_commit message starting with
+# "chore(version):" and skips the release job, so build/publish only run once.
+#
+# Prerelease: workflow_dispatch from a non-main branch → compute
+# X.Y.Z-rc.<short-sha>, stamp into the workspace only, npm publish under
+# dist-tag rc. No git commit, no tag, no MCP publish.
+#
+# Manual hotfix tag: pushing a v* tag (not on a "chore(version):" commit)
+# triggers build + publish from the tag's tree.
+
 on:
   push:
     branches: [main]
@@ -7,103 +20,196 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  MCP_PUBLISHER_VERSION: v1.7.7
+
 jobs:
-  # Stable releases on push to main under npm dist-tag 'latest'.
-  # Pre-releases on workflow_dispatch from any non-main branch
-  # (X.Y.Z-rc.N) under dist-tag 'rc'. cog computes the next version
-  # from conventional commits, updates package.json + server.json +
-  # CHANGELOG.md, commits "chore(version): X.Y.Z", and tags vX.Y.Z.
-  # A pushed tag (manual cut) short-circuits the bump and goes straight
-  # to build + publish.
   release:
-    # Skip when the triggering push is the bot's own version-bump commit
-    # to avoid re-running the workflow on the bump (which would either
-    # no-op or, on tag pushes, double-publish).
+    # Skip retriggers caused by our own bump push (whether the head_commit comes
+    # from the branch push or the tag push - both reference the same bump commit).
     if: >-
-      github.event_name != 'push' ||
-      github.ref_type == 'tag' ||
-      !startsWith(github.event.head_commit.message, 'chore(version):')
+      (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(version):'))
+      || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      released: ${{ steps.tag.outputs.released }}
+      released: ${{ steps.decide.outputs.released }}
+      mode: ${{ steps.decide.outputs.mode }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      ref: ${{ steps.decide.outputs.ref }}
+      npm_dist_tag: ${{ steps.decide.outputs.npm_dist_tag }}
     steps:
+      - name: Refuse workflow_dispatch from main
+        if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
+        run: |
+          echo "Prereleases must run from a non-main branch. Stable releases happen automatically on push to main." >&2
+          exit 1
+
+      # Stable + tag-push paths use the App token so we can push the bump
+      # commit through main's branch protection. Prereleases never push,
+      # so they don't need the App token - but using it is harmless.
+      - name: Generate GitHub App token
+        if: github.event_name == 'push' && github.ref_type != 'tag'
+        id: app_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app_token.outputs.token || github.token }}
 
-      - name: Short-circuit on tag push
-        if: github.ref_type == 'tag'
-        id: tagpush
-        run: echo "skip=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
-      - name: Compute bump args
-        if: github.ref_type != 'tag'
-        id: args
+      - run: npm ci
+
+      - name: Configure git identity
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            REF="${{ github.ref_name }}"
-            if [[ "$REF" == "main" ]]; then
-              echo "Refusing to publish a prerelease from main; use a feature branch." >&2
-              exit 1
-            fi
-            echo "value=--auto --pre rc.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=--auto" >> "$GITHUB_OUTPUT"
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Capture pre-bump tag
-        if: github.ref_type != 'tag'
-        id: before
-        run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo '')" >> "$GITHUB_OUTPUT"
-
-      - name: Bump
-        if: github.ref_type != 'tag'
+      # ---- Stable: push to main ----
+      - name: Bump (cog) - stamps files, commits, tags
+        if: github.event_name == 'push' && github.ref_type != 'tag'
         id: bump
         uses: cocogitto/cocogitto-action@9a9fe03b31c47444290c0d7f9b1ee1b44ee13f20 # v4.1.0
         continue-on-error: true
         with:
           command: bump
-          args: ${{ steps.args.outputs.value }}
+          args: --auto
           git-user: github-actions[bot]
           git-user-email: 41898282+github-actions[bot]@users.noreply.github.com
 
-      - name: Resolve tag + released flag
-        id: tag
+      - name: Detect bump result
+        if: github.event_name == 'push' && github.ref_type != 'tag'
+        id: bump_result
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          else
-            AFTER=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-            if [[ -z "$AFTER" || "$AFTER" == "${{ steps.before.outputs.tag }}" ]]; then
-              echo "released=false" >> "$GITHUB_OUTPUT"
-              echo "No releasable commits since '${{ steps.before.outputs.tag }}'"
+          NEW_TAG=$(git tag --points-at HEAD 'v*' | head -1 || echo "")
+          HEAD_MSG=$(git log -1 --pretty=%s)
+          if [[ -z "$NEW_TAG" ]]; then
+            echo "No releasable commits since last tag - skipping release."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$HEAD_MSG" != chore\(version\):* ]]; then
+            echo "Expected HEAD to be a bump commit (chore(version): ...), got: $HEAD_MSG" >&2
+            exit 1
+          fi
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${NEW_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Push bump commit + tag to main
+        if: github.event_name == 'push' && github.ref_type != 'tag' && steps.bump_result.outputs.released == 'true'
+        run: |
+          git push origin HEAD:main
+          git push origin "${{ steps.bump_result.outputs.tag }}"
+
+      # ---- Prerelease: workflow_dispatch from a non-main branch ----
+      - name: Compute prerelease short-sha
+        if: github.event_name == 'workflow_dispatch'
+        id: pre_sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # cog runs pre_bump_hooks (stamping) and creates a local commit + tag.
+      # Nothing is pushed - the workspace is discarded with the runner.
+      - name: Prerelease bump (cog) - local only, never pushed
+        if: github.event_name == 'workflow_dispatch'
+        id: pre_bump
+        uses: cocogitto/cocogitto-action@9a9fe03b31c47444290c0d7f9b1ee1b44ee13f20 # v4.1.0
+        continue-on-error: true
+        with:
+          command: bump
+          args: --auto --pre rc.${{ steps.pre_sha.outputs.short }}
+          git-user: github-actions[bot]
+          git-user-email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Detect prerelease tag
+        if: github.event_name == 'workflow_dispatch'
+        id: pre_result
+        run: |
+          NEW_TAG=$(git tag --points-at HEAD 'v*' | head -1 || echo "")
+          if [[ -z "$NEW_TAG" ]]; then
+            echo "No releasable commits since last tag - prerelease skipped."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Discard the local tag; prereleases must not push tags.
+          git tag -d "$NEW_TAG"
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${NEW_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # ---- Final decision (sets job outputs for all paths) ----
+      - name: Decide
+        id: decide
+        env:
+          STABLE_RELEASED: ${{ steps.bump_result.outputs.released }}
+          STABLE_VERSION: ${{ steps.bump_result.outputs.version }}
+          STABLE_TAG: ${{ steps.bump_result.outputs.tag }}
+          PRE_RELEASED: ${{ steps.pre_result.outputs.released }}
+          PRE_VERSION: ${{ steps.pre_result.outputs.version }}
+          PRE_TAG: ${{ steps.pre_result.outputs.tag }}
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            if [[ "$TAG" == *-* ]]; then DIST=rc; else DIST=latest; fi
+            {
+              echo "released=true"
+              echo "mode=tag-push"
+              echo "tag=$TAG"
+              echo "version=$VERSION"
+              echo "ref=$TAG"
+              echo "npm_dist_tag=$DIST"
+            } >> "$GITHUB_OUTPUT"
+
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            if [[ "$STABLE_RELEASED" == "true" ]]; then
+              {
+                echo "released=true"
+                echo "mode=stable"
+                echo "tag=$STABLE_TAG"
+                echo "version=$STABLE_VERSION"
+                echo "ref=$STABLE_TAG"
+                echo "npm_dist_tag=latest"
+              } >> "$GITHUB_OUTPUT"
             else
-              echo "released=true" >> "$GITHUB_OUTPUT"
-              echo "tag=$AFTER" >> "$GITHUB_OUTPUT"
+              echo "released=false" >> "$GITHUB_OUTPUT"
             fi
+
+          else
+            # workflow_dispatch: prerelease (refused above if from main).
+            if [[ "$PRE_RELEASED" != "true" ]]; then
+              echo "released=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            {
+              echo "released=true"
+              echo "mode=prerelease"
+              echo "tag=$PRE_TAG"
+              echo "version=$PRE_VERSION"
+              echo "ref=${{ github.sha }}"
+              echo "npm_dist_tag=rc"
+            } >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Push tag
-        if: github.ref_type != 'tag' && steps.tag.outputs.released == 'true'
-        # Push only the tag - cog doesn't create a bump commit
-        # (disable_bump_commit), so the tag points at the existing
-        # branch HEAD. No writes to the branch, branch protection
-        # untouched, history clean.
-        run: git push origin "${{ steps.tag.outputs.tag }}"
-
-  # Build + publish run in-band in the same workflow run that pushed the
-  # tag (whether dispatched, push-to-main, or triggered by a manual tag
-  # push). Pushes from GITHUB_TOKEN don't retrigger workflows, so no
-  # double-fire from our own tag pushes.
+  # Single source of truth for typecheck + build + npm pack. Uploads the
+  # tarball and stamped server.json as a workflow artifact so downstream
+  # publish jobs don't re-typecheck or re-stamp.
   build:
     needs: [release]
     if: needs.release.outputs.released == 'true'
@@ -111,7 +217,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          ref: ${{ needs.release.outputs.ref }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -120,26 +226,59 @@ jobs:
 
       - run: npm ci
 
-      - name: Stamp version from tag
+      # Stable (tag ref) trees already contain real versions baked in by the
+      # bump commit. Prerelease (sha ref) trees still have whatever's in main
+      # and need stamping to the rc version.
+      - name: Stamp version (prerelease only)
+        if: needs.release.outputs.mode == 'prerelease'
         env:
-          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
-          VERSION="${TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
-          node -e "
-            const fs = require('fs');
-            const sj = JSON.parse(fs.readFileSync('server.json', 'utf8'));
-            sj.version = '$VERSION';
-            for (const p of sj.packages || []) p.version = '$VERSION';
-            fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\n');
-          "
+          node scripts/stamp-server-json.mjs "$VERSION"
+
+      - name: Verify on-disk version matches release version
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          SRV_VERSION=$(node -p "require('./server.json').version")
+          if [[ "$PKG_VERSION" != "$VERSION" || "$SRV_VERSION" != "$VERSION" ]]; then
+            echo "Version mismatch: package.json=$PKG_VERSION server.json=$SRV_VERSION expected=$VERSION" >&2
+            exit 1
+          fi
 
       - run: npm run typecheck
 
       - run: npm run build
 
-      - name: Pack tarball
-        run: npm pack
+      - run: npm pack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: |
+            *.tgz
+            server.json
+          retention-days: 7
+          if-no-files-found: error
+
+  # Stable + tag-push only: GitHub Release with changelog + tarball.
+  github-release:
+    needs: [release, build]
+    if: needs.release.outputs.released == 'true' && (needs.release.outputs.mode == 'stable' || needs.release.outputs.mode == 'tag-push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
 
       - name: Generate changelog for this tag
         id: changelog
@@ -151,12 +290,14 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          TAG="${{ needs.release.outputs.tag }}"
           TARBALL=$(ls *.tgz)
           {
-            printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\n' "${TAG#v}"
-            printf 'Or from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```\n\n---\n\n' "${{ github.repository }}" "$TAG" "$TARBALL"
+            printf 'Install with:\n```\nnpm install @hostsmith/mcp-server@%s\n```\n\n' "$VERSION"
+            printf 'Or from the GitHub Release tarball:\n```\nnpm install https://github.com/%s/releases/download/%s/%s\n```\n\n---\n\n' "$REPO" "$TAG" "$TARBALL"
             cat <<'CHANGELOG'
           ${{ steps.changelog.outputs.stdout }}
           CHANGELOG
@@ -168,9 +309,7 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md
 
-  # Publishes @hostsmith/mcp-server to npm using GitHub OIDC (npm Trusted Publisher).
-  # Stable tags (vX.Y.Z) publish under 'latest'. Prerelease tags (vX.Y.Z-*)
-  # publish under 'rc' so they don't override the default install target.
+  # Stable -> 'latest', prerelease -> 'rc', manual tag -> matches tag suffix.
   publish-npm:
     needs: [release, build]
     if: needs.release.outputs.released == 'true'
@@ -179,43 +318,47 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org/
 
-      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
 
-      - name: Stamp version from tag
+      - name: Publish tarball
         env:
-          TAG: ${{ needs.release.outputs.tag }}
+          DIST_TAG: ${{ needs.release.outputs.npm_dist_tag }}
         run: |
-          VERSION="${TAG#v}"
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-          node -e "
-            const fs = require('fs');
-            const sj = JSON.parse(fs.readFileSync('server.json', 'utf8'));
-            sj.version = '$VERSION';
-            for (const p of sj.packages || []) p.version = '$VERSION';
-            fs.writeFileSync('server.json', JSON.stringify(sj, null, 2) + '\n');
-          "
+          TARBALL=$(ls *.tgz)
+          npm publish "$TARBALL" --provenance --access public --tag "$DIST_TAG"
 
-      - run: npm run typecheck
+  # Stable releases only (no '-' in tag). Prereleases never reach the MCP
+  # registry. server.json comes from the build artifact so its version
+  # matches what was published to npm.
+  publish-mcp:
+    needs: [release, build, publish-npm]
+    if: needs.release.outputs.released == 'true' && (needs.release.outputs.mode == 'stable' || needs.release.outputs.mode == 'tag-push') && !contains(needs.release.outputs.tag, '-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
 
-      - run: npm run build
-
-      - name: Determine npm dist-tag
-        id: disttag
+      - name: Install mcp-publisher
+        env:
+          VER: ${{ env.MCP_PUBLISHER_VERSION }}
         run: |
-          TAG="${{ needs.release.outputs.tag }}"
-          if [[ "$TAG" == *-* ]]; then
-            echo "tag=rc" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VER}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+          chmod +x ./mcp-publisher
+          ./mcp-publisher --version
 
-      - run: npm publish --provenance --access public --tag ${{ steps.disttag.outputs.tag }}
+      - name: Login (GitHub OIDC) and publish
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

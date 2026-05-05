@@ -20,14 +20,18 @@ const ALL_PARTITIONS: Partition[] = ["us", "eu"];
 
 const partitionSchema = z
   .enum(["us", "eu"])
-  .describe('Hostsmith data partition: "us" (United States) or "eu" (European Union)');
+  .describe(
+    'Hostsmith data partition: "us" (United States) or "eu" (European Union)',
+  );
 
 // HOSTSMITH_API_DOMAIN overrides the SDK's hardcoded hostsmith.net domain
 // across both partitions (e.g. "hostsmith.net" →
 // "https://us.api.hostsmith.net", "https://eu.api.hostsmith.net").
 // Falls back to HOSTSMITH_BASE_URL for a single-host override, then to the
 // SDK's built-in prod URLs.
-function partitionUrlsFromEnv(): Partial<Record<Partition, string>> | undefined {
+function partitionUrlsFromEnv():
+  | Partial<Record<Partition, string>>
+  | undefined {
   const apiDomain = process.env.HOSTSMITH_API_DOMAIN;
   if (!apiDomain) return undefined;
   return {
@@ -94,24 +98,67 @@ function getToken(extra: { authInfo?: AuthInfo }): string {
   );
 }
 
+export const SERVER_INSTRUCTIONS = `
+Hostsmith MCP server: publish, share, and host files or static sites.
+
+Context bootstrap:
+- On first use in a session, call get_account and list_domains once to learn the user's account, homePartition, plan limits, and available domains. Cache and reuse these for the rest of the session; only re-call if the user asks for a refresh or you have reason to suspect the data changed (e.g. a domain was just claimed).
+- list_sites changes frequently (any create/delete mutates it). Always re-call before acting on a site reference rather than relying on a cached result.
+
+Partition selection:
+- Pass partition: "eu" when the user signals EU residency or GDPR; otherwise omit partition and let it default to the user's home partition. Ask if unsure.
+
+Plans and limits:
+- Free, Basic, and Standard plans only allow sites in the user's home partition. Creating a site in a non-home partition on those plans returns the API error "Site limit reached for current plan" — only Premium and above can host sites across partitions. Do not pre-emptively refuse cross-partition requests; attempt the call and surface that error verbatim so the user knows they need to upgrade.
+
+Deploying content:
+- Use deploy_files for content you generated in-memory (HTML, JSON, reports).
+- Use deploy_path for files or folders that already live on the user's disk.
+- The site must exist first; call create_site if no siteId is available.
+- Inside a VS Code extension or other sandboxed client where directory access is restricted, prefer reading individual file contents and calling deploy_files over passing a directory to deploy_path.
+
+Naming:
+- Site subdomains are lowercase alphanumeric with hyphens; no dots, no uppercase, no underscores.
+
+Resolving the user's site reference:
+- Infer the intended FQDN from how the user described the site:
+  - A name that looks like an FQDN (e.g. \`blog.example.com\`) → split into subdomain + domain and validate against list_domains.
+  - A bare string that doesn't look like an FQDN (e.g. "my-blog") → assume it's a subdomain on a shared domain in the user's home partition.
+  - Phrases like "my company homepage" on a domain the user owns with \`enableApexDomain: true\` → apex/\`www\` site.
+  - When genuinely ambiguous, ask the user.
+- After resolving, look up the FQDN in the latest list_sites result to determine whether this is a new or existing site, and validate the domain/subdomain against list_domains.
+- Before performing any create/deploy/delete action, show the user the resolved info — full FQDN, partition, and whether the site is new or existing — and ask for confirmation.
+
+Destructive actions (require explicit user confirmation; never call speculatively):
+- delete_site is irreversible — the URL goes dark immediately and content cannot be recovered.
+- deploy_path and deploy_files against an existing site overwrite its current content. If the resolved FQDN matches an existing site, confirm with the user that they want to overwrite it before deploying.
+`.trim();
+
 export function buildServer(): McpServer {
-  const server = new McpServer({
-    name: "hostsmith",
-    version: PKG_VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: "hostsmith",
+      version: PKG_VERSION,
+    },
+    {
+      instructions: SERVER_INSTRUCTIONS,
+    },
+  );
 
   server.tool(
     "list_sites",
-    "List Hostsmith sites in your account. Use when the user asks what they have hosted, or before creating/deploying to find an existing site. Returns each site's `siteId`, `subdomain`, `domain`, and current status — feed `siteId` into `get_site`, `deploy_path`, `deploy_files`, or `delete_site`. By default queries all data partitions and merges the results; pass `partition: \"us\"` or `\"eu\"` to limit the query.",
+    'List Hostsmith sites in the user\'s account. Returns each site\'s `siteId`, `subdomain`, `domain`, and current status — feed `siteId` into `get_site`, `deploy_path`, `deploy_files`, or `delete_site`. This is the source of truth for "does the user already have a site at FQDN X" — call it before any create/deploy/delete to resolve the user\'s site reference. By default queries all data partitions and merges the results; pass `partition: "us"` or `"eu"` to limit the query.',
     {
       partition: partitionSchema
         .optional()
-        .describe('Filter by data partition. Omit to query all partitions.'),
+        .describe("Filter by data partition. Omit to query all partitions."),
     },
     async ({ partition }, extra) => {
       try {
         const token = getToken(extra);
-        const partitions: Partition[] = partition ? [partition] : ALL_PARTITIONS;
+        const partitions: Partition[] = partition
+          ? [partition]
+          : ALL_PARTITIONS;
 
         const results = await Promise.all(
           partitions.map(async (p) => {
@@ -140,17 +187,21 @@ export function buildServer(): McpServer {
     {
       partition: partitionSchema
         .optional()
-        .describe('Filter by data partition. Omit to query all partitions.'),
+        .describe("Filter by data partition. Omit to query all partitions."),
       shared: z
         .boolean()
         .optional()
-        .describe("Filter by domain type: true for shared only, false for custom only. Omit for both."),
+        .describe(
+          "Filter by domain type: true for shared only, false for custom only. Omit for both.",
+        ),
     },
     async ({ partition, shared }, extra) => {
       try {
         const token = getToken(extra);
         const listParams = shared !== undefined ? { shared } : undefined;
-        const partitions: Partition[] = partition ? [partition] : ALL_PARTITIONS;
+        const partitions: Partition[] = partition
+          ? [partition]
+          : ALL_PARTITIONS;
 
         const results = await Promise.all(
           partitions.map(async (p) => {
@@ -213,10 +264,14 @@ export function buildServer(): McpServer {
     "get_site",
     "Get full details of a specific Hostsmith site by ID, including its public URL (`https://<subdomain>.<domain>`), current deployment status, and configuration. Use after `list_sites` to inspect a single site, or after `deploy_path` / `deploy_files` to confirm the site is live and grab the URL to share with the user. Defaults to the user's home partition; pass `partition` explicitly when the site lives in a different one (visible in `list_sites` output).",
     {
-      siteId: z.string().describe("The site ID returned by `list_sites` or `create_site`."),
+      siteId: z
+        .string()
+        .describe("The site ID returned by `list_sites` or `create_site`."),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in (visible in list_sites output). Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, partition }, extra) => {
       try {
@@ -236,20 +291,32 @@ export function buildServer(): McpServer {
 
   server.tool(
     "create_site",
-    "Create a new Hostsmith site and return its `siteId`, full URL, and configuration. Use when the user wants to publish or host new content and no suitable site exists yet (check `list_sites` first if unsure). After creation, deploy content with `deploy_path` (local file or folder) or `deploy_files` (inline content). Pick the parent domain from `list_domains`; pass `partition: \"eu\"` for European data residency, otherwise defaults to the user's home partition.",
+    `Create a new Hostsmith site and return its \`siteId\`, full URL, and configuration. Use when the user wants to publish or host new content and no suitable site already exists. After creation, deploy content with \`deploy_path\` (local file or folder) or \`deploy_files\` (inline content). The site-resolution and confirmation flow is described in the global server instructions; the rules below are specific to this tool's parameters.
+
+\`domain\` MUST be one of the domains returned by \`list_domains\` for this user — never invent or assume one. The selected domain must be in \`active\` status; if it isn't, surface the problem to the user instead of attempting creation. \`partition\` passed to this tool MUST match the partition of the selected domain.
+
+Subdomain selection must respect the domain's capabilities from \`list_domains\`. To serve the bare apex, pass \`subdomain: "www"\` — only valid when the domain has \`enableApexDomain: true\` (typically custom domains the user owns). For any other subdomain, the domain must have \`enableSubdomains: true\`; shared hosting domains (e.g. \`*.hostsmith.link\`) and most custom domains have \`enableApexDomain: false\`, so a non-apex subdomain is required there. If the chosen domain doesn't support the kind of site the user asked for (apex vs subdomain), surface the conflict rather than silently picking something else.`,
     {
       domain: z
         .string()
         .describe(
-          'Parent domain for the site, e.g. "us.hostsmith.link", "eu.hostsmith.link", or a custom domain from `list_domains`.',
+          'Parent domain for the site, MUST be one returned by `list_domains` for this user. Examples: "us.hostsmith.link", "eu.hostsmith.link", or a custom domain the user owns. Do not invent domains.',
         ),
       subdomain: z
         .string()
+        .regex(
+          /^[a-z0-9-]+$/,
+          "Subdomain must be lowercase alphanumeric with hyphens; no dots, uppercase, or underscores.",
+        )
         .optional()
-        .describe('Subdomain prefix; auto-generated if omitted. To create a site at the apex of an apex-enabled custom domain, pass `subdomain: "www"` (the bare apex serves via redirect to the www form).'),
+        .describe(
+          'Subdomain prefix; auto-generated if omitted. Lowercase alphanumeric with hyphens only — no dots, uppercase, or underscores. Pass `subdomain: "www"` only when the chosen `domain` has `enableApexDomain: true` in `list_domains` (creates the canonical site at `www.<apex>` with the bare apex redirecting to it). For any other subdomain the chosen `domain` must have `enableSubdomains: true`.',
+        ),
       partition: partitionSchema
         .optional()
-        .describe("Data partition for the new site. Omit to use the user's home partition."),
+        .describe(
+          "Data partition for the new site. Must match the partition of the selected domain.",
+        ),
     },
     async ({ domain, subdomain, partition }, extra) => {
       try {
@@ -271,14 +338,20 @@ export function buildServer(): McpServer {
     "delete_site",
     "Permanently delete a Hostsmith site and all of its deployed files. **Destructive — only call after explicit user confirmation.** The site URL becomes unreachable immediately and the content cannot be recovered. The user must pass `confirm: true` for the deletion to proceed; otherwise the call returns an error explaining the safeguard.",
     {
-      siteId: z.string().describe("The site ID to delete (from `list_sites` or `get_site`)."),
+      siteId: z
+        .string()
+        .describe("The site ID to delete (from `list_sites` or `get_site`)."),
       confirm: z
         .boolean()
         .optional()
-        .describe("Must be `true` to actually perform the deletion. Required safeguard — confirm with the user before passing it."),
+        .describe(
+          "Set to true only after the user has explicitly confirmed they want to permanently delete this site. Required safeguard — never pass true speculatively.",
+        ),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, confirm, partition }, extra) => {
       if (!confirm) {
@@ -316,15 +389,21 @@ export function buildServer(): McpServer {
 
   server.tool(
     "deploy_path",
-    "Publish a local file or folder to a Hostsmith site at a public HTTPS URL. Use when the user wants to share or deploy something they have on disk (HTML, PDF, image, static-site folder). Returns the live URL on success. The site must already exist — call `create_site` first if you do not have a `siteId`. For folders larger than 50 files, zip first.",
+    "Publish a local file or folder to a Hostsmith site at a public HTTPS URL. Use when the user wants to share or deploy something they have on disk (HTML, PDF, image, static-site folder). Returns the live URL on success. The site must already exist — call `create_site` first if you do not have a `siteId`. For folders larger than 50 files, zip first. Deploying to a site that already has content overwrites it — confirm overwrite with the user first.",
     {
-      siteId: z.string().describe("The site ID to deploy to (from `list_sites` or `create_site`)."),
+      siteId: z
+        .string()
+        .describe(
+          "The site ID to deploy to (from `list_sites` or `create_site`).",
+        ),
       path: z
         .string()
         .describe("Absolute path to a local file or directory to deploy."),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, path: path, partition }, extra) => {
       try {
@@ -385,22 +464,32 @@ export function buildServer(): McpServer {
 
   server.tool(
     "deploy_files",
-    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist — call `create_site` first if you do not have a `siteId`.",
+    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist — call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it — confirm overwrite with the user first.",
     {
-      siteId: z.string().describe("The site ID to deploy to (from `list_sites` or `create_site`)."),
+      siteId: z
+        .string()
+        .describe(
+          "The site ID to deploy to (from `list_sites` or `create_site`).",
+        ),
       files: z
         .array(
           z.object({
             fileName: z
               .string()
-              .describe("File path relative to site root (e.g. `index.html`, `assets/style.css`)."),
+              .describe(
+                "File path relative to site root (e.g. `index.html`, `assets/style.css`).",
+              ),
             content: z.string().describe("The file content as a string."),
           }),
         )
-        .describe("Files to deploy. For an HTML site, include an `index.html` as the entry point; otherwise any single file (PDF, image, JSON, etc.) works on its own."),
+        .describe(
+          "Files to deploy. For an HTML site, include an `index.html` as the entry point; otherwise any single file (PDF, image, JSON, etc.) works on its own.",
+        ),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, files, partition }, extra) => {
       try {
@@ -455,7 +544,8 @@ export function getProtectedResourceMetadata(opts: MetadataOptions) {
     resource: opts.mcpBaseUrl,
     authorization_servers: [opts.hostsmithUrl],
     scopes_supported: [...OAUTH_SCOPES],
-    resource_documentation: "https://hostsmith.net/docs/developers/authentication",
+    resource_documentation:
+      "https://hostsmith.net/docs/developers/authentication",
   };
 }
 
@@ -466,7 +556,11 @@ export interface CreateFetchHandlerOptions {
   mcpBaseUrl: string;
 }
 
-function buildBearerError(mcpBaseUrl: string, error: string, status = 401): Response {
+function buildBearerError(
+  mcpBaseUrl: string,
+  error: string,
+  status = 401,
+): Response {
   return new Response(JSON.stringify({ error }), {
     status,
     headers: {
@@ -495,11 +589,18 @@ export function createFetchHandler(
   const { hostsmithUrl, mcpBaseUrl } = opts;
 
   const app = new Hono();
-  const protectedResourceMetadata = getProtectedResourceMetadata({ mcpBaseUrl, hostsmithUrl });
+  const protectedResourceMetadata = getProtectedResourceMetadata({
+    mcpBaseUrl,
+    hostsmithUrl,
+  });
 
-  app.get("/.well-known/oauth-protected-resource", (c) => c.json(protectedResourceMetadata));
+  app.get("/.well-known/oauth-protected-resource", (c) =>
+    c.json(protectedResourceMetadata),
+  );
 
-  function readAuthInfo(authorization: string | undefined): AuthInfo | Response {
+  function readAuthInfo(
+    authorization: string | undefined,
+  ): AuthInfo | Response {
     if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
       return buildBearerError(mcpBaseUrl, "unauthorized");
     }
