@@ -20,16 +20,17 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 
 ## Tools
 
-| Tool           | Description                                               |
-| -------------- | --------------------------------------------------------- |
-| `list_sites`   | List all sites in your account for a given data partition |
-| `get_site`     | Get details of a specific site                            |
-| `create_site`  | Create a new site                                         |
-| `delete_site`  | Delete a site                                             |
-| `list_domains` | List available domains (shared and custom)                |
-| `get_account`  | Get account info, subscription plan, and usage            |
-| `deploy_path`  | Deploy a local file or directory to a site                |
-| `deploy_files` | Deploy inline file contents to a site                     |
+| Tool                   | Description                                                  |
+| ---------------------- | ------------------------------------------------------------ |
+| `list_sites`           | List all sites in your account for a given data partition    |
+| `get_site`             | Get details of a specific site                               |
+| `create_site`          | Create a new site                                            |
+| `delete_site`          | Delete a site                                                |
+| `list_domains`         | List available domains (shared and custom)                   |
+| `get_account`          | Get account info, subscription plan, and usage               |
+| `deploy_files`         | Deploy inline file contents to a site                        |
+| `deploy_create_upload` | Start a direct-to-S3 upload for binaries / large files       |
+| `deploy_finalize`      | Commit a deploy started with `deploy_create_upload`          |
 
 ## Usage
 
@@ -115,7 +116,7 @@ npx @hostsmith/mcp-server http
 
 ## Documentation
 
-Deeper material lives at [hostsmith.net/docs/developers/mcp](https://hostsmith.net/docs/developers/mcp).
+Deeper material lives at [hostsmith.net/docs/mcp](https://hostsmith.net/docs/mcp).
 
 ## Contributing
 

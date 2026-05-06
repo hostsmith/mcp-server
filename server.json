@@ -7,7 +7,7 @@
     "url": "https://github.com/hostsmith/mcp-server",
     "source": "github"
   },
-  "websiteUrl": "https://hostsmith.net/docs/developers/mcp",
+  "websiteUrl": "https://hostsmith.net/docs/mcp",
   "packages": [
     {
       "registryType": "npm",
