@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.3.0 - 2026-05-06
+#### Features
+- add MCP tool annotations and update docs URL - (2b39d0a) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.2.1 - 2026-05-06
 #### Bug Fixes
 - update docs and official docs link - (c89e6c2) - gp42-ops (GitHub)
