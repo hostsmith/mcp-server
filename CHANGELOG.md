@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.2.1 - 2026-05-06
+#### Bug Fixes
+- update docs and official docs link - (c89e6c2) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.2.0 - 2026-05-06
 #### Features
 - add server instructions for cross-client agent guidance - (19ef591) - gp42-ops (GitHub)
