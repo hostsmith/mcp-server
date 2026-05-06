@@ -1,12 +1,22 @@
 tag_prefix = "v"
 ignore_merge_commits = true
 
-# We use cog only to decide the next version and create the tag.
-# No bump commit on the branch, no CHANGELOG.md committed to the repo.
-# package.json + server.json stay at 0.0.0 in source - CI stamps the
-# real version from the tag before npm pack/publish.
-disable_bump_commit = true
-disable_changelog = true
+# CI uses cog to compute the next version, run pre_bump_hooks that stamp
+# package.json + server.json, write CHANGELOG.md, and create a single
+# "chore(version): vX.Y.Z" commit + tag. CI pushes the bump commit + tag
+# to main using a GitHub App token (RELEASE_APP_CLIENT_ID +
+# RELEASE_APP_PRIVATE_KEY) that has bypass rights on main's branch
+# protection. Prereleases (workflow_dispatch) do NOT call cog bump - they
+# compute the rc version separately and never commit, tag, or update the
+# changelog.
+disable_changelog = false
+disable_bump_commit = false
+
+pre_bump_hooks = [
+  "npm version {{version}} --no-git-tag-version --allow-same-version",
+  "node scripts/stamp-server-json.mjs {{version}}",
+  "git add package.json package-lock.json server.json",
+]
 
 [changelog]
 remote = "github.com"

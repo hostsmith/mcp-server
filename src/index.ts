@@ -3,8 +3,6 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { Hostsmith, ApiError } from "@hostsmith/sdk";
 import type { Partition } from "@hostsmith/sdk";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative, posix, basename } from "node:path";
 import { z } from "zod";
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
@@ -20,14 +18,29 @@ const ALL_PARTITIONS: Partition[] = ["us", "eu"];
 
 const partitionSchema = z
   .enum(["us", "eu"])
-  .describe('Hostsmith data partition: "us" (United States) or "eu" (European Union)');
+  .describe(
+    'Hostsmith data partition: "us" (United States) or "eu" (European Union)',
+  );
 
 // HOSTSMITH_API_DOMAIN overrides the SDK's hardcoded hostsmith.net domain
 // across both partitions (e.g. "hostsmith.net" →
 // "https://us.api.hostsmith.net", "https://eu.api.hostsmith.net").
+// S3 multipart upload chunk size used by the public-API. Mirrored
+// here so deploy_create_upload can surface partSize on each file
+// without round-tripping to the API for it. Keep in sync with
+// public-api/src/services/upload.ts UPLOAD_CHUNK_SIZE.
+const S3_PART_SIZE = 5 * 1024 * 1024;
+
+// Presigned-URL TTL used by the public-API. Mirrored to compute
+// expiresAt for the agent. Keep in sync with public-api/src/lib/s3.ts
+// UPLOAD_URL_EXPIRATION.
+const UPLOAD_URL_TTL_SECONDS = 3600;
+
 // Falls back to HOSTSMITH_BASE_URL for a single-host override, then to the
 // SDK's built-in prod URLs.
-function partitionUrlsFromEnv(): Partial<Record<Partition, string>> | undefined {
+function partitionUrlsFromEnv():
+  | Partial<Record<Partition, string>>
+  | undefined {
   const apiDomain = process.env.HOSTSMITH_API_DOMAIN;
   if (!apiDomain) return undefined;
   return {
@@ -59,25 +72,6 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
-async function readDirectory(
-  dirPath: string,
-): Promise<{ fileName: string; content: Buffer }[]> {
-  const entries = await readdir(dirPath, {
-    recursive: true,
-    withFileTypes: true,
-  });
-  const files: { fileName: string; content: Buffer }[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const fullPath = join(entry.parentPath, entry.name);
-    const relativePath = relative(dirPath, fullPath);
-    const fileName = relativePath.split("\\").join(posix.sep);
-    const content = await readFile(fullPath);
-    files.push({ fileName, content });
-  }
-  return files;
-}
-
 function decodeJwtPayload(token: string): Record<string, unknown> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("Invalid JWT");
@@ -94,24 +88,68 @@ function getToken(extra: { authInfo?: AuthInfo }): string {
   );
 }
 
+export const SERVER_INSTRUCTIONS = `
+Hostsmith MCP server: publish, share, and host files or static sites.
+
+Context bootstrap:
+- On first use in a session, call get_account and list_domains once to learn the user's account (orgId, orgName), the user's home partition under user.homePartition, plan limits, and available domains. Cache and reuse these for the rest of the session; only re-call if the user asks for a refresh or you have reason to suspect the data changed (e.g. a domain was just claimed).
+- list_sites changes frequently (any create/delete mutates it). Always re-call before acting on a site reference rather than relying on a cached result.
+
+Partition selection:
+- Pass partition: "eu" when the user signals EU residency or GDPR; otherwise omit partition and let it default to the user's home partition. Ask if unsure.
+
+Plans and limits:
+- Free, Basic, and Standard plans only allow sites in the user's home partition. Creating a site in a non-home partition on those plans returns the API error "Site limit reached for current plan" — only Premium and above can host sites across partitions. Do not pre-emptively refuse cross-partition requests; attempt the call and surface that error verbatim so the user knows they need to upgrade.
+
+Deploying content:
+- Two paths, pick by file size and type:
+  - Use deploy_files for inline text/JSON/HTML you generated yourself, when total payload < ~1 MB. Bytes ship through the MCP server's JSON-RPC channel; subject to a ~6 MB hard ceiling.
+  - Use deploy_create_upload + deploy_finalize for binaries (PDF, image, video, zip), files larger than ~1 MB, or any file you have available in your environment but not as inline text. The tools return presigned S3 PUT URLs so bytes flow directly from your environment to S3, never through the MCP server.
+- Read or generate the content client-side (in your own environment) — the MCP server has no access to the user's local filesystem.
+- The site must exist first; call create_site if no siteId is available.
+
+Naming:
+- Site subdomains are lowercase alphanumeric with hyphens; no dots, no uppercase, no underscores.
+
+Resolving the user's site reference:
+- Infer the intended FQDN from how the user described the site:
+  - A name that looks like an FQDN (e.g. \`blog.example.com\`) → split into subdomain + domain and validate against list_domains.
+  - A bare string that doesn't look like an FQDN (e.g. "my-blog") → assume it's a subdomain on a shared domain in the user's home partition.
+  - Phrases like "my company homepage" on a domain the user owns with \`enableApexDomain: true\` → apex/\`www\` site.
+  - When genuinely ambiguous, ask the user.
+- After resolving, look up the FQDN in the latest list_sites result to determine whether this is a new or existing site, and validate the domain/subdomain against list_domains.
+- Before performing any create/deploy/delete action, show the user the resolved info — full FQDN, partition, and whether the site is new or existing — and ask for confirmation.
+
+Destructive actions (require explicit user confirmation; never call speculatively):
+- delete_site is irreversible — the URL goes dark immediately and content cannot be recovered.
+- deploy_files (and deploy_create_upload + deploy_finalize) against an existing site overwrite its current content. If the resolved FQDN matches an existing site, confirm with the user that they want to overwrite it before deploying.
+`.trim();
+
 export function buildServer(): McpServer {
-  const server = new McpServer({
-    name: "hostsmith",
-    version: PKG_VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: "hostsmith",
+      version: PKG_VERSION,
+    },
+    {
+      instructions: SERVER_INSTRUCTIONS,
+    },
+  );
 
   server.tool(
     "list_sites",
-    "List Hostsmith sites in your account. Use when the user asks what they have hosted, or before creating/deploying to find an existing site. Returns each site's `siteId`, `subdomain`, `domain`, and current status — feed `siteId` into `get_site`, `deploy_path`, `deploy_files`, or `delete_site`. By default queries all data partitions and merges the results; pass `partition: \"us\"` or `\"eu\"` to limit the query.",
+    'List Hostsmith sites in the user\'s account. Returns each site\'s `siteId`, `subdomain`, `domain`, and current status — feed `siteId` into `get_site`, `deploy_files`, `deploy_create_upload`, or `delete_site`. This is the source of truth for "does the user already have a site at FQDN X" — call it before any create/deploy/delete to resolve the user\'s site reference. By default queries all data partitions and merges the results; pass `partition: "us"` or `"eu"` to limit the query.',
     {
       partition: partitionSchema
         .optional()
-        .describe('Filter by data partition. Omit to query all partitions.'),
+        .describe("Filter by data partition. Omit to query all partitions."),
     },
     async ({ partition }, extra) => {
       try {
         const token = getToken(extra);
-        const partitions: Partition[] = partition ? [partition] : ALL_PARTITIONS;
+        const partitions: Partition[] = partition
+          ? [partition]
+          : ALL_PARTITIONS;
 
         const results = await Promise.all(
           partitions.map(async (p) => {
@@ -140,17 +178,21 @@ export function buildServer(): McpServer {
     {
       partition: partitionSchema
         .optional()
-        .describe('Filter by data partition. Omit to query all partitions.'),
+        .describe("Filter by data partition. Omit to query all partitions."),
       shared: z
         .boolean()
         .optional()
-        .describe("Filter by domain type: true for shared only, false for custom only. Omit for both."),
+        .describe(
+          "Filter by domain type: true for shared only, false for custom only. Omit for both.",
+        ),
     },
     async ({ partition, shared }, extra) => {
       try {
         const token = getToken(extra);
         const listParams = shared !== undefined ? { shared } : undefined;
-        const partitions: Partition[] = partition ? [partition] : ALL_PARTITIONS;
+        const partitions: Partition[] = partition
+          ? [partition]
+          : ALL_PARTITIONS;
 
         const results = await Promise.all(
           partitions.map(async (p) => {
@@ -175,7 +217,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_account",
-    "Get the user's account: organization details, current subscription plan with its limits (max sites, max domains, storage, bandwidth), and current usage counts. Use to check how much headroom the user has before creating new sites or to confirm plan-tier features. Usage is summed across all partitions.",
+    "Get the user's account: organization details (`orgId`, `orgName`), the calling user's home partition under `user.homePartition`, current subscription plan with its limits (max sites, max domains, storage, bandwidth), and current usage counts. Use to check how much headroom the user has before creating new sites or to confirm plan-tier features. Usage is summed across all partitions.",
     {},
     async (_params, extra) => {
       try {
@@ -189,13 +231,11 @@ export function buildServer(): McpServer {
         );
 
         // Use the first partition's account as base, sum usage across partitions.
-        // Drop `partition` on the merged view since usage is aggregated across all of them.
         const base = results[0].account;
         for (let i = 1; i < results.length; i++) {
           base.usage.sites += results[i].account.usage.sites;
           base.usage.domains += results[i].account.usage.domains;
         }
-        base.partition = null;
 
         return {
           content: [{ type: "text", text: JSON.stringify(base, null, 2) }],
@@ -211,12 +251,16 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_site",
-    "Get full details of a specific Hostsmith site by ID, including its public URL (`https://<subdomain>.<domain>`), current deployment status, and configuration. Use after `list_sites` to inspect a single site, or after `deploy_path` / `deploy_files` to confirm the site is live and grab the URL to share with the user. Defaults to the user's home partition; pass `partition` explicitly when the site lives in a different one (visible in `list_sites` output).",
+    "Get full details of a specific Hostsmith site by ID, including its public URL (`https://<subdomain>.<domain>`), current deployment status, and configuration. Use after `list_sites` to inspect a single site, or after `deploy_files` / `deploy_finalize` to confirm the site is live and grab the URL to share with the user. Defaults to the user's home partition; pass `partition` explicitly when the site lives in a different one (visible in `list_sites` output).",
     {
-      siteId: z.string().describe("The site ID returned by `list_sites` or `create_site`."),
+      siteId: z
+        .string()
+        .describe("The site ID returned by `list_sites` or `create_site`."),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in (visible in list_sites output). Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, partition }, extra) => {
       try {
@@ -236,20 +280,32 @@ export function buildServer(): McpServer {
 
   server.tool(
     "create_site",
-    "Create a new Hostsmith site and return its `siteId`, full URL, and configuration. Use when the user wants to publish or host new content and no suitable site exists yet (check `list_sites` first if unsure). After creation, deploy content with `deploy_path` (local file or folder) or `deploy_files` (inline content). Pick the parent domain from `list_domains`; pass `partition: \"eu\"` for European data residency, otherwise defaults to the user's home partition.",
+    `Create a new Hostsmith site and return its \`siteId\`, full URL, and configuration. Use when the user wants to publish or host new content and no suitable site already exists. After creation, deploy content with \`deploy_files\` (small inline text) or \`deploy_create_upload\` + \`deploy_finalize\` (binaries / files > ~1 MB, uploaded directly to S3). The site-resolution and confirmation flow is described in the global server instructions; the rules below are specific to this tool's parameters.
+
+\`domain\` MUST be one of the domains returned by \`list_domains\` for this user — never invent or assume one. The selected domain must be in \`active\` status; if it isn't, surface the problem to the user instead of attempting creation. \`partition\` passed to this tool MUST match the partition of the selected domain.
+
+Subdomain selection must respect the domain's capabilities from \`list_domains\`. To serve the bare apex, pass \`subdomain: "www"\` — only valid when the domain has \`enableApexDomain: true\` (typically custom domains the user owns). For any other subdomain, the domain must have \`enableSubdomains: true\`; shared hosting domains (e.g. \`*.hostsmith.link\`) and most custom domains have \`enableApexDomain: false\`, so a non-apex subdomain is required there. If the chosen domain doesn't support the kind of site the user asked for (apex vs subdomain), surface the conflict rather than silently picking something else.`,
     {
       domain: z
         .string()
         .describe(
-          'Parent domain for the site, e.g. "us.hostsmith.link", "eu.hostsmith.link", or a custom domain from `list_domains`.',
+          'Parent domain for the site, MUST be one returned by `list_domains` for this user. Examples: "us.hostsmith.link", "eu.hostsmith.link", or a custom domain the user owns. Do not invent domains.',
         ),
       subdomain: z
         .string()
+        .regex(
+          /^[a-z0-9-]+$/,
+          "Subdomain must be lowercase alphanumeric with hyphens; no dots, uppercase, or underscores.",
+        )
         .optional()
-        .describe('Subdomain prefix; auto-generated if omitted. To create a site at the apex of an apex-enabled custom domain, pass `subdomain: "www"` (the bare apex serves via redirect to the www form).'),
+        .describe(
+          'Subdomain prefix; auto-generated if omitted. Lowercase alphanumeric with hyphens only — no dots, uppercase, or underscores. Pass `subdomain: "www"` only when the chosen `domain` has `enableApexDomain: true` in `list_domains` (creates the canonical site at `www.<apex>` with the bare apex redirecting to it). For any other subdomain the chosen `domain` must have `enableSubdomains: true`.',
+        ),
       partition: partitionSchema
         .optional()
-        .describe("Data partition for the new site. Omit to use the user's home partition."),
+        .describe(
+          "Data partition for the new site. Must match the partition of the selected domain.",
+        ),
     },
     async ({ domain, subdomain, partition }, extra) => {
       try {
@@ -271,14 +327,20 @@ export function buildServer(): McpServer {
     "delete_site",
     "Permanently delete a Hostsmith site and all of its deployed files. **Destructive — only call after explicit user confirmation.** The site URL becomes unreachable immediately and the content cannot be recovered. The user must pass `confirm: true` for the deletion to proceed; otherwise the call returns an error explaining the safeguard.",
     {
-      siteId: z.string().describe("The site ID to delete (from `list_sites` or `get_site`)."),
+      siteId: z
+        .string()
+        .describe("The site ID to delete (from `list_sites` or `get_site`)."),
       confirm: z
         .boolean()
         .optional()
-        .describe("Must be `true` to actually perform the deletion. Required safeguard — confirm with the user before passing it."),
+        .describe(
+          "Set to true only after the user has explicitly confirmed they want to permanently delete this site. Required safeguard — never pass true speculatively.",
+        ),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, confirm, partition }, extra) => {
       if (!confirm) {
@@ -315,92 +377,33 @@ export function buildServer(): McpServer {
   );
 
   server.tool(
-    "deploy_path",
-    "Publish a local file or folder to a Hostsmith site at a public HTTPS URL. Use when the user wants to share or deploy something they have on disk (HTML, PDF, image, static-site folder). Returns the live URL on success. The site must already exist — call `create_site` first if you do not have a `siteId`. For folders larger than 50 files, zip first.",
-    {
-      siteId: z.string().describe("The site ID to deploy to (from `list_sites` or `create_site`)."),
-      path: z
-        .string()
-        .describe("Absolute path to a local file or directory to deploy."),
-      partition: partitionSchema
-        .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
-    },
-    async ({ siteId, path: path, partition }, extra) => {
-      try {
-        const client = createClient(getToken(extra), partition);
-        const info = await stat(path);
-        let files: { fileName: string; content: Buffer }[];
-
-        if (info.isFile()) {
-          files = [
-            {
-              fileName: basename(path),
-              content: await readFile(path),
-            },
-          ];
-        } else {
-          files = await readDirectory(path);
-        }
-
-        if (files.length === 0) {
-          return {
-            content: [{ type: "text", text: "No files found in: " + path }],
-            isError: true,
-          };
-        }
-
-        const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
-        if (files.length > 50) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Directory contains ${files.length} files (${(totalSize / 1024 / 1024).toFixed(1)} MB). Consider compressing to a zip file first for faster uploads.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const result = await client.sites.deploy(siteId, files);
-        const site = await client.sites.get(siteId);
-        const url = `https://${site.subdomain}.${site.domain}`;
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Deployed ${files.length} file(s) to ${url}. Version: ${result.versionId}, Status: ${result.status}`,
-            },
-          ],
-        };
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: formatError(err) }],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  server.tool(
     "deploy_files",
-    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist — call `create_site` first if you do not have a `siteId`.",
+    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist — call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it — confirm overwrite with the user first.",
     {
-      siteId: z.string().describe("The site ID to deploy to (from `list_sites` or `create_site`)."),
+      siteId: z
+        .string()
+        .describe(
+          "The site ID to deploy to (from `list_sites` or `create_site`).",
+        ),
       files: z
         .array(
           z.object({
             fileName: z
               .string()
-              .describe("File path relative to site root (e.g. `index.html`, `assets/style.css`)."),
+              .describe(
+                "File path relative to site root (e.g. `index.html`, `assets/style.css`).",
+              ),
             content: z.string().describe("The file content as a string."),
           }),
         )
-        .describe("Files to deploy. For an HTML site, include an `index.html` as the entry point; otherwise any single file (PDF, image, JSON, etc.) works on its own."),
+        .describe(
+          "Files to deploy. For an HTML site, include an `index.html` as the entry point; otherwise any single file (PDF, image, JSON, etc.) works on its own.",
+        ),
       partition: partitionSchema
         .optional()
-        .describe("Data partition the site lives in. Omit to use the user's home partition."),
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
     },
     async ({ siteId, files, partition }, extra) => {
       try {
@@ -415,6 +418,214 @@ export function buildServer(): McpServer {
             {
               type: "text",
               text: `Deployed ${files.length} file(s). Version: ${result.versionId}, Status: ${result.status}`,
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "deploy_create_upload",
+    `Start a direct-to-S3 upload for binary or large files. Use this instead of \`deploy_files\` for binaries (PDF, image, video, zip) or any file > ~1 MB. The MCP server has no access to the user's filesystem and \`deploy_files\` ships content inline through Lambda (capped at ~6 MB JSON-RPC payloads); this tool returns presigned S3 PUT URLs so the file bytes flow directly from your environment to S3, never through the MCP server.
+
+**Bundle into a zip first when:** the upload contains more than 3 files OR any file is larger than ~1 MB. The fileWorker auto-extracts a single-zip upload after promotion, so subdirectories are preserved end-to-end and you avoid one PUT round-trip per file. Skip zipping only for the trivial single-small-file case (e.g. one HTML).
+
+  Bash bundle-and-deploy template (the agent should adapt fileNames and the cleanup prompt):
+    TMP=$(mktemp -d)
+    zip -r "$TMP/site.zip" index.html styles.css img/   # add every file/dir to deploy
+    SIZE=$(stat -c%s "$TMP/site.zip" 2>/dev/null || stat -f%z "$TMP/site.zip")
+    # 1. call deploy_create_upload with { siteId, files: [{ fileName: "site.zip", fileSize: $SIZE }] }
+    # 2. PUT $TMP/site.zip to the returned URL(s) per the protocol below, capturing ETag
+    # 3. call deploy_finalize with { siteId, versionId, completions: [...] }
+    # 4. ASK THE USER: "Deploy succeeded. Remove temp folder $TMP? [y/N]"
+    #    Only run \`rm -rf "$TMP"\` after explicit confirmation; otherwise leave it for them to inspect.
+
+Three-step protocol:
+1. Call this tool with \`{ siteId, files: [{ fileName, fileSize }] }\`. Receive \`{ versionId, files: { [fileName]: { uploadId, key, partUploadUrls: [{ part, url }], partSize, expiresAt } } }\`.
+2. For each file, slice the bytes into chunks of \`partSize\` and PUT each chunk to its \`partUploadUrls[i].url\`. **Capture the \`ETag\` response header from every PUT** — you will need it for finalize.
+
+   Single-part (small file, one URL): \`curl -D - -X PUT --data-binary @file.pdf "$URL"\`, then grep the response headers for \`ETag\`.
+
+   Multi-part with \`dd\` (no temp files; reads each chunk in place):
+     count=$(jq ".files[\\"large.zip\\"].partUploadUrls | length" envelope.json)
+     for i in $(seq 0 $((count-1))); do
+       url=$(jq -r ".files[\\"large.zip\\"].partUploadUrls[$i].url" envelope.json)
+       etag=$(dd if=large.zip bs=5M skip=$i count=1 status=none \\
+                | curl -sS -D - -X PUT --data-binary @- "$url" \\
+                | awk -F': ' 'tolower($1)=="etag"{print $2}' | tr -d '\\r')
+       echo "{ \\"PartNumber\\": $((i+1)), \\"ETag\\": $etag }" >> parts.json
+     done
+
+   Multi-part in Python — **prefer this over dd for files > ~50 MB** (parallel PUTs, no temp files, cleaner error handling):
+     import json, requests
+     from concurrent.futures import ThreadPoolExecutor
+     env = json.load(open("envelope.json"))
+     info = env["files"]["large.zip"]
+     part_size = info["partSize"]
+     def upload_part(p):
+         with open("large.zip", "rb") as f:   # own handle per thread
+             f.seek((p["part"] - 1) * part_size)
+             r = requests.put(p["url"], data=f.read(part_size))
+             r.raise_for_status()
+             return {"PartNumber": p["part"], "ETag": r.headers["ETag"]}
+     with ThreadPoolExecutor(max_workers=5) as ex:   # cap concurrency at 5
+         parts = list(ex.map(upload_part, info["partUploadUrls"]))
+3. Call \`deploy_finalize\` with \`{ siteId, versionId, completions: [{ uploadId, key, parts: [{ ETag, PartNumber }] }] }\` for every multi-part file. Single-part uploads (\`uploadId\` is empty in the start response) need no completion entry.
+
+The site must already exist — call \`create_site\` first if you do not have a \`siteId\`. Deploying overwrites existing content; confirm overwrite with the user first.
+
+If your host environment provides no HTTP-PUT capability (no bash/curl, no Python \`requests\`, no \`fetch\`), present the presigned URL(s) to the user with instructions to upload the file manually (curl or browser), then call \`deploy_finalize\` after the user confirms.`,
+    {
+      siteId: z
+        .string()
+        .describe(
+          "The site ID to deploy to (from `list_sites` or `create_site`).",
+        ),
+      files: z
+        .array(
+          z.object({
+            fileName: z
+              .string()
+              .describe(
+                "File path relative to site root (e.g. `index.html`, `report.pdf`, `assets/video.mp4`).",
+              ),
+            fileSize: z
+              .number()
+              .int()
+              .min(1)
+              .describe("Exact file size in bytes."),
+          }),
+        )
+        .describe("Files to upload. Most user requests are a single file."),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    async ({ siteId, files, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const manifest = files.map((f) => ({
+          fileName: f.fileName,
+          fileSize: f.fileSize,
+          parts: Math.max(1, Math.ceil(f.fileSize / S3_PART_SIZE)),
+        }));
+        const envelope = await client.sites.startUpload(siteId, manifest);
+
+        // Surface partSize and expiresAt on each file so the agent
+        // knows how to chunk and when the URLs become unusable.
+        const expiresAt = new Date(
+          Date.now() + UPLOAD_URL_TTL_SECONDS * 1000,
+        ).toISOString();
+        const enriched: Record<string, unknown> = {};
+        for (const [fileName, info] of Object.entries(envelope.files)) {
+          enriched[fileName] = {
+            ...info,
+            partSize: S3_PART_SIZE,
+            expiresAt,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { versionId: envelope.versionId, files: enriched },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "deploy_finalize",
+    "Commit a deploy started with `deploy_create_upload`. Pass the `versionId` from the start response and a `completions` array containing the agent-collected ETags for each multi-part file (single-part uploads — those whose start response had an empty `uploadId` — do not need a completion entry). Returns the live site URL on success. The site must belong to the authenticated user; bearer-token auth is re-validated server-side, so holding presigned URLs alone does not let an unrelated caller finalize.",
+    {
+      siteId: z
+        .string()
+        .describe(
+          "The site ID being deployed to (must match the start call).",
+        ),
+      versionId: z
+        .string()
+        .describe(
+          "The `versionId` returned by `deploy_create_upload`.",
+        ),
+      completions: z
+        .array(
+          z.object({
+            uploadId: z
+              .string()
+              .describe(
+                "S3 multipart upload ID from the start response's `files[fileName].uploadId`.",
+              ),
+            key: z
+              .string()
+              .describe(
+                "S3 object key from the start response's `files[fileName].key`.",
+              ),
+            parts: z
+              .array(
+                z.object({
+                  ETag: z
+                    .string()
+                    .describe(
+                      "ETag header value from the corresponding PUT response (include surrounding quotes if S3 returned them).",
+                    ),
+                  PartNumber: z
+                    .number()
+                    .int()
+                    .min(1)
+                    .describe(
+                      "Part number matching `partUploadUrls[i].part` from the start response.",
+                    ),
+                }),
+              )
+              .describe("ETag + PartNumber for every uploaded part of this file."),
+          }),
+        )
+        .optional()
+        .describe(
+          "Completions for multi-part uploads. Omit or pass an empty array if every file was single-part.",
+        ),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    async ({ siteId, versionId, completions, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.finalizeUpload(
+          siteId,
+          versionId,
+          completions,
+        );
+        const site = await client.sites.get(siteId);
+        const url = `https://${site.subdomain}.${site.domain}`;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Deploy finalized for ${url}. Version: ${versionId}, Status: ${result.status}`,
             },
           ],
         };
@@ -455,7 +666,8 @@ export function getProtectedResourceMetadata(opts: MetadataOptions) {
     resource: opts.mcpBaseUrl,
     authorization_servers: [opts.hostsmithUrl],
     scopes_supported: [...OAUTH_SCOPES],
-    resource_documentation: "https://hostsmith.net/docs/developers/authentication",
+    resource_documentation:
+      "https://hostsmith.net/docs/developers/authentication",
   };
 }
 
@@ -466,7 +678,11 @@ export interface CreateFetchHandlerOptions {
   mcpBaseUrl: string;
 }
 
-function buildBearerError(mcpBaseUrl: string, error: string, status = 401): Response {
+function buildBearerError(
+  mcpBaseUrl: string,
+  error: string,
+  status = 401,
+): Response {
   return new Response(JSON.stringify({ error }), {
     status,
     headers: {
@@ -495,11 +711,18 @@ export function createFetchHandler(
   const { hostsmithUrl, mcpBaseUrl } = opts;
 
   const app = new Hono();
-  const protectedResourceMetadata = getProtectedResourceMetadata({ mcpBaseUrl, hostsmithUrl });
+  const protectedResourceMetadata = getProtectedResourceMetadata({
+    mcpBaseUrl,
+    hostsmithUrl,
+  });
 
-  app.get("/.well-known/oauth-protected-resource", (c) => c.json(protectedResourceMetadata));
+  app.get("/.well-known/oauth-protected-resource", (c) =>
+    c.json(protectedResourceMetadata),
+  );
 
-  function readAuthInfo(authorization: string | undefined): AuthInfo | Response {
+  function readAuthInfo(
+    authorization: string | undefined,
+  ): AuthInfo | Response {
     if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
       return buildBearerError(mcpBaseUrl, "unauthorized");
     }

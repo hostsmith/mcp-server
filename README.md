@@ -119,7 +119,7 @@ Deeper material lives at [hostsmith.net/docs/developers/mcp](https://hostsmith.n
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Security issues: see [SECURITY.md](./SECURITY.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md) (including the [Releases](./CONTRIBUTING.md#releases) section for the version-stamping flow). Security issues: see [SECURITY.md](./SECURITY.md).
 
 ## License
 
