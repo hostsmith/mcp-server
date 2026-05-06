@@ -99,13 +99,13 @@ Partition selection:
 - Pass partition: "eu" when the user signals EU residency or GDPR; otherwise omit partition and let it default to the user's home partition. Ask if unsure.
 
 Plans and limits:
-- Free, Basic, and Standard plans only allow sites in the user's home partition. Creating a site in a non-home partition on those plans returns the API error "Site limit reached for current plan" — only Premium and above can host sites across partitions. Do not pre-emptively refuse cross-partition requests; attempt the call and surface that error verbatim so the user knows they need to upgrade.
+- Free, Basic, and Standard plans only allow sites in the user's home partition. Creating a site in a non-home partition on those plans returns the API error "Site limit reached for current plan" - only Premium and above can host sites across partitions. Do not pre-emptively refuse cross-partition requests; attempt the call and surface that error verbatim so the user knows they need to upgrade.
 
 Deploying content:
 - Two paths, pick by file size and type:
   - Use deploy_files for inline text/JSON/HTML you generated yourself, when total payload < ~1 MB. Bytes ship through the MCP server's JSON-RPC channel; subject to a ~6 MB hard ceiling.
   - Use deploy_create_upload + deploy_finalize for binaries (PDF, image, video, zip), files larger than ~1 MB, or any file you have available in your environment but not as inline text. The tools return presigned S3 PUT URLs so bytes flow directly from your environment to S3, never through the MCP server.
-- Read or generate the content client-side (in your own environment) — the MCP server has no access to the user's local filesystem.
+- Read or generate the content client-side (in your own environment) - the MCP server has no access to the user's local filesystem.
 - The site must exist first; call create_site if no siteId is available.
 
 Naming:
@@ -118,10 +118,10 @@ Resolving the user's site reference:
   - Phrases like "my company homepage" on a domain the user owns with \`enableApexDomain: true\` → apex/\`www\` site.
   - When genuinely ambiguous, ask the user.
 - After resolving, look up the FQDN in the latest list_sites result to determine whether this is a new or existing site, and validate the domain/subdomain against list_domains.
-- Before performing any create/deploy/delete action, show the user the resolved info — full FQDN, partition, and whether the site is new or existing — and ask for confirmation.
+- Before performing any create/deploy/delete action, show the user the resolved info - full FQDN, partition, and whether the site is new or existing - and ask for confirmation.
 
 Destructive actions (require explicit user confirmation; never call speculatively):
-- delete_site is irreversible — the URL goes dark immediately and content cannot be recovered.
+- delete_site is irreversible - the URL goes dark immediately and content cannot be recovered.
 - deploy_files (and deploy_create_upload + deploy_finalize) against an existing site overwrite its current content. If the resolved FQDN matches an existing site, confirm with the user that they want to overwrite it before deploying.
 `.trim();
 
@@ -138,12 +138,13 @@ export function buildServer(): McpServer {
 
   server.tool(
     "list_sites",
-    'List Hostsmith sites in the user\'s account. Returns each site\'s `siteId`, `subdomain`, `domain`, and current status — feed `siteId` into `get_site`, `deploy_files`, `deploy_create_upload`, or `delete_site`. This is the source of truth for "does the user already have a site at FQDN X" — call it before any create/deploy/delete to resolve the user\'s site reference. By default queries all data partitions and merges the results; pass `partition: "us"` or `"eu"` to limit the query.',
+    'List Hostsmith sites in the user\'s account. Returns each site\'s `siteId`, `subdomain`, `domain`, and current status - feed `siteId` into `get_site`, `deploy_files`, `deploy_create_upload`, or `delete_site`. This is the source of truth for "does the user already have a site at FQDN X" - call it before any create/deploy/delete to resolve the user\'s site reference. By default queries all data partitions and merges the results; pass `partition: "us"` or `"eu"` to limit the query.',
     {
       partition: partitionSchema
         .optional()
         .describe("Filter by data partition. Omit to query all partitions."),
     },
+    { title: "List sites", readOnlyHint: true },
     async ({ partition }, extra) => {
       try {
         const token = getToken(extra);
@@ -186,6 +187,7 @@ export function buildServer(): McpServer {
           "Filter by domain type: true for shared only, false for custom only. Omit for both.",
         ),
     },
+    { title: "List domains", readOnlyHint: true },
     async ({ partition, shared }, extra) => {
       try {
         const token = getToken(extra);
@@ -219,6 +221,7 @@ export function buildServer(): McpServer {
     "get_account",
     "Get the user's account: organization details (`orgId`, `orgName`), the calling user's home partition under `user.homePartition`, current subscription plan with its limits (max sites, max domains, storage, bandwidth), and current usage counts. Use to check how much headroom the user has before creating new sites or to confirm plan-tier features. Usage is summed across all partitions.",
     {},
+    { title: "Get account", readOnlyHint: true },
     async (_params, extra) => {
       try {
         const token = getToken(extra);
@@ -262,6 +265,7 @@ export function buildServer(): McpServer {
           "Data partition the site lives in (visible in list_sites output). Omit to use the user's home partition.",
         ),
     },
+    { title: "Get site", readOnlyHint: true },
     async ({ siteId, partition }, extra) => {
       try {
         const client = createClient(getToken(extra), partition);
@@ -282,9 +286,9 @@ export function buildServer(): McpServer {
     "create_site",
     `Create a new Hostsmith site and return its \`siteId\`, full URL, and configuration. Use when the user wants to publish or host new content and no suitable site already exists. After creation, deploy content with \`deploy_files\` (small inline text) or \`deploy_create_upload\` + \`deploy_finalize\` (binaries / files > ~1 MB, uploaded directly to S3). The site-resolution and confirmation flow is described in the global server instructions; the rules below are specific to this tool's parameters.
 
-\`domain\` MUST be one of the domains returned by \`list_domains\` for this user — never invent or assume one. The selected domain must be in \`active\` status; if it isn't, surface the problem to the user instead of attempting creation. \`partition\` passed to this tool MUST match the partition of the selected domain.
+\`domain\` MUST be one of the domains returned by \`list_domains\` for this user - never invent or assume one. The selected domain must be in \`active\` status; if it isn't, surface the problem to the user instead of attempting creation. \`partition\` passed to this tool MUST match the partition of the selected domain.
 
-Subdomain selection must respect the domain's capabilities from \`list_domains\`. To serve the bare apex, pass \`subdomain: "www"\` — only valid when the domain has \`enableApexDomain: true\` (typically custom domains the user owns). For any other subdomain, the domain must have \`enableSubdomains: true\`; shared hosting domains (e.g. \`*.hostsmith.link\`) and most custom domains have \`enableApexDomain: false\`, so a non-apex subdomain is required there. If the chosen domain doesn't support the kind of site the user asked for (apex vs subdomain), surface the conflict rather than silently picking something else.`,
+Subdomain selection must respect the domain's capabilities from \`list_domains\`. To serve the bare apex, pass \`subdomain: "www"\` - only valid when the domain has \`enableApexDomain: true\` (typically custom domains the user owns). For any other subdomain, the domain must have \`enableSubdomains: true\`; shared hosting domains (e.g. \`*.hostsmith.link\`) and most custom domains have \`enableApexDomain: false\`, so a non-apex subdomain is required there. If the chosen domain doesn't support the kind of site the user asked for (apex vs subdomain), surface the conflict rather than silently picking something else.`,
     {
       domain: z
         .string()
@@ -299,7 +303,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
         )
         .optional()
         .describe(
-          'Subdomain prefix; auto-generated if omitted. Lowercase alphanumeric with hyphens only — no dots, uppercase, or underscores. Pass `subdomain: "www"` only when the chosen `domain` has `enableApexDomain: true` in `list_domains` (creates the canonical site at `www.<apex>` with the bare apex redirecting to it). For any other subdomain the chosen `domain` must have `enableSubdomains: true`.',
+          'Subdomain prefix; auto-generated if omitted. Lowercase alphanumeric with hyphens only - no dots, uppercase, or underscores. Pass `subdomain: "www"` only when the chosen `domain` has `enableApexDomain: true` in `list_domains` (creates the canonical site at `www.<apex>` with the bare apex redirecting to it). For any other subdomain the chosen `domain` must have `enableSubdomains: true`.',
         ),
       partition: partitionSchema
         .optional()
@@ -307,6 +311,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
           "Data partition for the new site. Must match the partition of the selected domain.",
         ),
     },
+    { title: "Create site", destructiveHint: true },
     async ({ domain, subdomain, partition }, extra) => {
       try {
         const client = createClient(getToken(extra), partition);
@@ -325,7 +330,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
 
   server.tool(
     "delete_site",
-    "Permanently delete a Hostsmith site and all of its deployed files. **Destructive — only call after explicit user confirmation.** The site URL becomes unreachable immediately and the content cannot be recovered. The user must pass `confirm: true` for the deletion to proceed; otherwise the call returns an error explaining the safeguard.",
+    "Permanently delete a Hostsmith site and all of its deployed files. **Destructive - only call after explicit user confirmation.** The site URL becomes unreachable immediately and the content cannot be recovered. The user must pass `confirm: true` for the deletion to proceed; otherwise the call returns an error explaining the safeguard.",
     {
       siteId: z
         .string()
@@ -334,7 +339,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
         .boolean()
         .optional()
         .describe(
-          "Set to true only after the user has explicitly confirmed they want to permanently delete this site. Required safeguard — never pass true speculatively.",
+          "Set to true only after the user has explicitly confirmed they want to permanently delete this site. Required safeguard - never pass true speculatively.",
         ),
       partition: partitionSchema
         .optional()
@@ -342,6 +347,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
           "Data partition the site lives in. Omit to use the user's home partition.",
         ),
     },
+    { title: "Delete site", destructiveHint: true },
     async ({ siteId, confirm, partition }, extra) => {
       if (!confirm) {
         return {
@@ -378,7 +384,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
 
   server.tool(
     "deploy_files",
-    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist — call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it — confirm overwrite with the user first.",
+    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist - call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it - confirm overwrite with the user first.",
     {
       siteId: z
         .string()
@@ -405,6 +411,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
           "Data partition the site lives in. Omit to use the user's home partition.",
         ),
     },
+    { title: "Deploy files (inline)", destructiveHint: true },
     async ({ siteId, files, partition }, extra) => {
       try {
         const client = createClient(getToken(extra), partition);
@@ -448,7 +455,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
 
 Three-step protocol:
 1. Call this tool with \`{ siteId, files: [{ fileName, fileSize }] }\`. Receive \`{ versionId, files: { [fileName]: { uploadId, key, partUploadUrls: [{ part, url }], partSize, expiresAt } } }\`.
-2. For each file, slice the bytes into chunks of \`partSize\` and PUT each chunk to its \`partUploadUrls[i].url\`. **Capture the \`ETag\` response header from every PUT** — you will need it for finalize.
+2. For each file, slice the bytes into chunks of \`partSize\` and PUT each chunk to its \`partUploadUrls[i].url\`. **Capture the \`ETag\` response header from every PUT** - you will need it for finalize.
 
    Single-part (small file, one URL): \`curl -D - -X PUT --data-binary @file.pdf "$URL"\`, then grep the response headers for \`ETag\`.
 
@@ -462,7 +469,7 @@ Three-step protocol:
        echo "{ \\"PartNumber\\": $((i+1)), \\"ETag\\": $etag }" >> parts.json
      done
 
-   Multi-part in Python — **prefer this over dd for files > ~50 MB** (parallel PUTs, no temp files, cleaner error handling):
+   Multi-part in Python - **prefer this over dd for files > ~50 MB** (parallel PUTs, no temp files, cleaner error handling):
      import json, requests
      from concurrent.futures import ThreadPoolExecutor
      env = json.load(open("envelope.json"))
@@ -478,7 +485,7 @@ Three-step protocol:
          parts = list(ex.map(upload_part, info["partUploadUrls"]))
 3. Call \`deploy_finalize\` with \`{ siteId, versionId, completions: [{ uploadId, key, parts: [{ ETag, PartNumber }] }] }\` for every multi-part file. Single-part uploads (\`uploadId\` is empty in the start response) need no completion entry.
 
-The site must already exist — call \`create_site\` first if you do not have a \`siteId\`. Deploying overwrites existing content; confirm overwrite with the user first.
+The site must already exist - call \`create_site\` first if you do not have a \`siteId\`. Deploying overwrites existing content; confirm overwrite with the user first.
 
 If your host environment provides no HTTP-PUT capability (no bash/curl, no Python \`requests\`, no \`fetch\`), present the presigned URL(s) to the user with instructions to upload the file manually (curl or browser), then call \`deploy_finalize\` after the user confirms.`,
     {
@@ -509,6 +516,7 @@ If your host environment provides no HTTP-PUT capability (no bash/curl, no Pytho
           "Data partition the site lives in. Omit to use the user's home partition.",
         ),
     },
+    { title: "Start S3 upload", destructiveHint: true },
     async ({ siteId, files, partition }, extra) => {
       try {
         const client = createClient(getToken(extra), partition);
@@ -556,7 +564,7 @@ If your host environment provides no HTTP-PUT capability (no bash/curl, no Pytho
 
   server.tool(
     "deploy_finalize",
-    "Commit a deploy started with `deploy_create_upload`. Pass the `versionId` from the start response and a `completions` array containing the agent-collected ETags for each multi-part file (single-part uploads — those whose start response had an empty `uploadId` — do not need a completion entry). Returns the live site URL on success. The site must belong to the authenticated user; bearer-token auth is re-validated server-side, so holding presigned URLs alone does not let an unrelated caller finalize.",
+    "Commit a deploy started with `deploy_create_upload`. Pass the `versionId` from the start response and a `completions` array containing the agent-collected ETags for each multi-part file (single-part uploads - those whose start response had an empty `uploadId` - do not need a completion entry). Returns the live site URL on success. The site must belong to the authenticated user; bearer-token auth is re-validated server-side, so holding presigned URLs alone does not let an unrelated caller finalize.",
     {
       siteId: z
         .string()
@@ -611,6 +619,7 @@ If your host environment provides no HTTP-PUT capability (no bash/curl, no Pytho
           "Data partition the site lives in. Omit to use the user's home partition.",
         ),
     },
+    { title: "Finalize deploy", destructiveHint: true },
     async ({ siteId, versionId, completions, partition }, extra) => {
       try {
         const client = createClient(getToken(extra), partition);
@@ -696,7 +705,7 @@ function buildBearerError(
  * Build a Web-Standard fetch handler exposing the Hostsmith MCP HTTP transport.
  *
  * Callers (CLI, Lambda wrapper, etc.) supply configuration explicitly. The
- * factory does not read process.env — env-derived defaults belong in callers.
+ * factory does not read process.env - env-derived defaults belong in callers.
  *
  * Mounts:
  *   - GET /.well-known/oauth-protected-resource  (RFC 9728 metadata)

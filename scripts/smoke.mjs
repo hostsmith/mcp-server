@@ -1,6 +1,6 @@
 // Smoke test: import createFetchHandler from the built package, hit the
 // protected-resource discovery doc as a synthetic Web Standard Request.
-// No network or sockets — pure in-process. Exits non-zero on any failure.
+// No network or sockets - pure in-process. Exits non-zero on any failure.
 
 import { createFetchHandler, getProtectedResourceMetadata, OAUTH_SCOPES, SERVER_INSTRUCTIONS } from "../dist/index.js";
 

@@ -53,7 +53,7 @@
     "type": "git",
     "url": "https://github.com/hostsmith/mcp-server"
   },
-  "homepage": "https://hostsmith.net/docs/developers/mcp",
+  "homepage": "https://hostsmith.net/docs/mcp/quick-start/",
   "bugs": {
     "url": "https://github.com/hostsmith/mcp-server/issues"
   },
