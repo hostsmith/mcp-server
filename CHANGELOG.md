@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.4.0 - 2026-05-07
+#### Features
+- publish server card at /.well-known/mcp/server-card.json - (5e21582) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.3.0 - 2026-05-06
 #### Features
 - add MCP tool annotations and update docs URL - (2b39d0a) - gp42-ops (GitHub)
