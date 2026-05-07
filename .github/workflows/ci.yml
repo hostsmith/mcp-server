@@ -27,7 +27,7 @@ jobs:
           npm pack --dry-run --json | node -e "
             const data = JSON.parse(require('fs').readFileSync(0, 'utf8'));
             const files = data[0].files.map(f => f.path).sort();
-            const allowedTop = new Set(['package.json', 'README.md', 'LICENSE']);
+            const allowedTop = new Set(['package.json', 'README.md', 'LICENSE', 'server.json']);
             const bad = files.filter(f => !f.startsWith('dist/') && !allowedTop.has(f));
             if (bad.length) {
               console.error('Tarball contains unexpected files:', bad);

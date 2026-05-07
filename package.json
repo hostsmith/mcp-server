@@ -17,7 +17,8 @@
     "hostsmith-mcp-server": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "server.json"
   ],
   "engines": {
     "node": ">=18"
