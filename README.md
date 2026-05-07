@@ -5,6 +5,7 @@
 [![Node Version](https://img.shields.io/node/v/@hostsmith/mcp-server)](./package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-0a7bbb.svg)](https://modelcontextprotocol.io)
+[![smithery badge](https://smithery.ai/badge/hostsmith/mcp-server)](https://smithery.ai/servers/hostsmith/mcp-server)
 
 Official [Model Context Protocol](https://modelcontextprotocol.io) server for the [Hostsmith](https://hostsmith.net) hosting platform.
 
@@ -81,7 +82,7 @@ The client handles the OAuth flow automatically - you'll be redirected to Hostsm
 
 ### Cursor (one-click install)
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](cursor://anysphere.cursor-deeplink/mcp/install?name=Hostsmith&config=eyJ1cmwiOiJodHRwczovL21jcC5ob3N0c21pdGgubmV0L21jcCJ9)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=Hostsmith&config=eyJ1cmwiOiJodHRwczovL21jcC5ob3N0c21pdGgubmV0L21jcCJ9)
 
 Click the badge to add the remote Hostsmith server (`https://mcp.hostsmith.net/mcp`) to Cursor. The first tool call triggers OAuth in your browser.
 
