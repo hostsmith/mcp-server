@@ -79,6 +79,12 @@ Any MCP client that supports remote Streamable HTTP transport can point directly
 
 The client handles the OAuth flow automatically - you'll be redirected to Hostsmith to authorize access.
 
+### Cursor (one-click install)
+
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](cursor://anysphere.cursor-deeplink/mcp/install?name=Hostsmith&config=eyJ1cmwiOiJodHRwczovL21jcC5ob3N0c21pdGgubmV0L21jcCJ9)
+
+Click the badge to add the remote Hostsmith server (`https://mcp.hostsmith.net/mcp`) to Cursor. The first tool call triggers OAuth in your browser.
+
 ### Local HTTP (self-hosted)
 
 Run the server in HTTP mode and have your MCP client perform OAuth against it:

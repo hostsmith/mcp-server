@@ -6,6 +6,7 @@ import type { Partition } from "@hostsmith/sdk";
 import { z } from "zod";
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
+import { MCP_SERVER_CARD_PATH, getServerCard } from "./serverCard.js";
 
 export const PKG_VERSION: string = (() => {
   // Resolve package.json relative to the compiled dist/ or source src/ dir
@@ -659,6 +660,9 @@ export const OAUTH_SCOPES = [
   "account:read",
 ] as const;
 
+export { MCP_SERVER_CARD_PATH, getServerCard } from "./serverCard.js";
+export type { ServerCardOptions } from "./serverCard.js";
+
 export interface MetadataOptions {
   /** Public URL where this MCP server is reachable (e.g. "https://mcp.hostsmith.net"). */
   mcpBaseUrl: string;
@@ -724,10 +728,16 @@ export function createFetchHandler(
     mcpBaseUrl,
     hostsmithUrl,
   });
+  const serverCard = getServerCard({ mcpBaseUrl, hostsmithUrl });
 
   app.get("/.well-known/oauth-protected-resource", (c) =>
     c.json(protectedResourceMetadata),
   );
+
+  app.get(MCP_SERVER_CARD_PATH, (c) => {
+    c.header("Cache-Control", "public, max-age=300, stale-while-revalidate=86400");
+    return c.json(serverCard);
+  });
 
   function readAuthInfo(
     authorization: string | undefined,
