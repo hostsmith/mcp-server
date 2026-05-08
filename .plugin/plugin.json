@@ -1,7 +1,8 @@
 {
-  "name": "hostsmith",
+  "name": "Hostsmith",
   "version": "1.4.0",
   "description": "Deploy static sites on Hostsmith - give it a file, get a live HTTPS URL. EU/US residency.",
+  "logo": "logo.png",
   "author": {
     "name": "Hostsmith",
     "url": "https://hostsmith.net"
