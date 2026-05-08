@@ -1,0 +1,20 @@
+{
+  "name": "hostsmith",
+  "version": "1.4.0",
+  "description": "Deploy static sites on Hostsmith - give it a file, get a live HTTPS URL. EU/US residency.",
+  "author": {
+    "name": "Hostsmith",
+    "url": "https://hostsmith.net"
+  },
+  "homepage": "https://hostsmith.net/docs/mcp/quick-start/",
+  "repository": "https://github.com/hostsmith/mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "hostsmith",
+    "mcp",
+    "hosting",
+    "deploy",
+    "static-site",
+    "publish"
+  ]
+}

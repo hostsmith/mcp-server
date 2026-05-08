@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Stamp the given version into server.json (top-level + every packages[].version).
-// Invoked from cog.toml pre_bump_hooks during a release.
+// Stamp the given version into server.json (top-level + every packages[].version)
+// and .plugin/plugin.json (top-level version). Invoked from cog.toml pre_bump_hooks.
 import fs from "node:fs";
 
 const version = process.argv[2];
@@ -9,10 +9,10 @@ if (!version) {
   process.exit(1);
 }
 
-const path = "server.json";
+const serverJsonPath = "server.json";
 const target = "@hostsmith/mcp-server";
 
-const sj = JSON.parse(fs.readFileSync(path, "utf8"));
+const sj = JSON.parse(fs.readFileSync(serverJsonPath, "utf8"));
 sj.version = version;
 let stampedPkg = false;
 for (const p of sj.packages || []) {
@@ -25,6 +25,11 @@ if (!stampedPkg) {
   console.error(`server.json packages[] has no entry with identifier "${target}"`);
   process.exit(1);
 }
-fs.writeFileSync(path, JSON.stringify(sj, null, 2) + "\n");
+fs.writeFileSync(serverJsonPath, JSON.stringify(sj, null, 2) + "\n");
+console.log(`stamped ${serverJsonPath} -> ${version}`);
 
-console.log(`stamped ${path} -> ${version}`);
+const pluginJsonPath = ".plugin/plugin.json";
+const pj = JSON.parse(fs.readFileSync(pluginJsonPath, "utf8"));
+pj.version = version;
+fs.writeFileSync(pluginJsonPath, JSON.stringify(pj, null, 2) + "\n");
+console.log(`stamped ${pluginJsonPath} -> ${version}`);
