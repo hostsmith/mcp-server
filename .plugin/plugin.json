@@ -1,6 +1,6 @@
 {
   "name": "Hostsmith",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Deploy static sites on Hostsmith - give it a file, get a live HTTPS URL. EU/US residency.",
   "logo": "https://hostsmith.net/img/icons/android-chrome-512x512.png",
   "author": {

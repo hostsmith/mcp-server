@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.5.0 - 2026-05-12
+#### Features
+- (**deploy**) describe partition-host URL shape and add sandbox-aware failure-recovery flow - (7e9c93b) - gp42-ops (GitHub)
+#### Documentation
+- add smithery badge and fix cursor install link - (eef726c) - gp42-ops (GitHub)
+#### Miscellaneous Chores
+- switch logo to remote - (3549efc) - gp42-ops (GitHub)
+- add mcp logo - (d74ddd4) - gp42-ops (GitHub)
+- add Open Plugins manifest for cursor.directory submission - (74ebd8a) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.4.0 - 2026-05-07
 #### Features
 - publish server card at /.well-known/mcp/server-card.json - (5e21582) - gp42-ops (GitHub)
