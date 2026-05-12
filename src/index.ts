@@ -105,7 +105,7 @@ Plans and limits:
 Deploying content:
 - Two paths, pick by file size and type:
   - Use deploy_files for inline text/JSON/HTML you generated yourself, when total payload < ~1 MB. Bytes ship through the MCP server's JSON-RPC channel; subject to a ~6 MB hard ceiling.
-  - Use deploy_create_upload + deploy_finalize for binaries (PDF, image, video, zip), files larger than ~1 MB, or any file you have available in your environment but not as inline text. The tools return presigned S3 PUT URLs so bytes flow directly from your environment to S3, never through the MCP server.
+  - Use deploy_create_upload + deploy_finalize for binaries (PDF, image, video, zip), files larger than ~1 MB, or any file you have available in your environment but not as inline text. The tools return per-part PUT URLs; bytes flow directly from your environment to the upload endpoint, never through the MCP server. The URL host is either a Hostsmith partition API host (\`us.api.hostsmith.net\` or \`eu.api.hostsmith.net\`) or a direct S3 endpoint - treat both identically (one HTTP PUT per URL, capture the \`ETag\` from each response).
 - Read or generate the content client-side (in your own environment) - the MCP server has no access to the user's local filesystem.
 - The site must exist first; call create_site if no siteId is available.
 
@@ -488,7 +488,29 @@ Three-step protocol:
 
 The site must already exist - call \`create_site\` first if you do not have a \`siteId\`. Deploying overwrites existing content; confirm overwrite with the user first.
 
-If your host environment provides no HTTP-PUT capability (no bash/curl, no Python \`requests\`, no \`fetch\`), present the presigned URL(s) to the user with instructions to upload the file manually (curl or browser), then call \`deploy_finalize\` after the user confirms.`,
+If your host environment provides no HTTP-PUT capability (no bash/curl, no Python \`requests\`, no \`fetch\`), present the URL(s) to the user with instructions to upload the file manually (curl or browser), then call \`deploy_finalize\` after the user confirms.
+
+If a PUT fails with a network/DNS error (connection refused, name resolution failure, timeout, sandbox-denied, proxy 403/407), the sandbox is blocking egress to the URL's host. Recovery flow:
+  1. Read the failing URL's hostname. It will be either \`us.api.hostsmith.net\`, \`eu.api.hostsmith.net\`, or an S3 endpoint (copy verbatim from the failing URL).
+  2. Infer the sandbox and give the user the exact configuration snippet:
+     - **Cursor** (signal: cwd contains \`.cursor/\`, or \`CURSOR_*\` env vars) - edit \`~/.cursor/sandbox.json\` (user scope) or \`<repo>/.cursor/sandbox.json\` (repo scope):
+       \`\`\`json
+       { "networkPolicy": { "allow": ["us.api.hostsmith.net", "eu.api.hostsmith.net"] } }
+       \`\`\`
+       Reload Cursor.
+     - **Claude Code** (signal: \`CLAUDE_CODE_*\` env vars, or \`~/.claude/\` settings present) - edit \`~/.claude/settings.json\`:
+       \`\`\`json
+       { "sandbox": { "enabled": true, "network": { "allowedDomains": ["us.api.hostsmith.net", "eu.api.hostsmith.net"] } } }
+       \`\`\`
+       If \`deniedDomains\` lists a matching host, remove it first - deny takes precedence.
+     - **Codex CLI** (signal: \`~/.codex/\` settings, \`CODEX_*\` env vars) - edit \`~/.codex/config.toml\`:
+       \`\`\`toml
+       [sandbox_workspace_write]
+       network_access = true
+       \`\`\`
+       Codex has no per-host allowlist at this layer - this enables network for workspace-write mode globally. Risk is bounded by the upload token in the URL.
+     - **Unknown sandbox** - tell the user: allow outbound HTTPS (port 443) to \`us.api.hostsmith.net\` and \`eu.api.hostsmith.net\` (and the failing S3 host if the URL points at S3) in whatever firewall/proxy they control. If a corporate HTTP proxy is in play, ensure \`CONNECT\` to those hostnames is permitted, or set \`NO_PROXY\` for direct routing.
+  3. After the user confirms the change, retry the failed PUT. Tokens in the URL (\`ut=...\` for partition-host URLs, \`X-Amz-Signature\` for S3 URLs) remain valid for 1 hour from issuance, so re-running the same URL within that window works without re-calling \`deploy_create_upload\`.`,
     {
       siteId: z
         .string()
