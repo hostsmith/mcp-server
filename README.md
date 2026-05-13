@@ -30,7 +30,7 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 | `list_domains`         | List available domains (shared and custom)                   |
 | `get_account`          | Get account info, subscription plan, and usage               |
 | `deploy_files`         | Deploy inline file contents to a site                        |
-| `deploy_create_upload` | Start a direct-to-S3 upload for binaries / large files       |
+| `deploy_create_upload` | Start a direct upload for binaries / large files             |
 | `deploy_finalize`      | Commit a deploy started with `deploy_create_upload`          |
 
 ## Usage
@@ -114,11 +114,23 @@ npx @hostsmith/mcp-server http
 | `PORT`                 | `3100`                   | HTTP server port.                                                                                                                                                                                                                                                                                                                 |
 | `MCP_BASE_URL`         | `http://localhost:$PORT` | Public URL of the MCP server, used in OAuth metadata.                                                                                                                                                                                                                                                                             |
 
+## Network access
+
+The MCP transport and OAuth flow run in your client's app process and need no agent-sandbox configuration - if your MCP client connected, those paths are working.
+
+The one place sandboxed agents commonly fail is the **upload PUT** during `deploy_create_upload` + `deploy_finalize`: the bytes go from the agent's shell to the partition API host. From the agent terminal, allow outbound HTTPS (port 443) to:
+
+- `us.api.hostsmith.net` (for sites in the `us` partition)
+- `eu.api.hostsmith.net` (for sites in the `eu` partition)
+
+Sandbox-specific snippets (Cursor `sandbox.json`, Claude Code `settings.json`, Codex `config.toml`, generic firewall guidance) live in the [Network access](https://hostsmith.net/docs/mcp/network-access) docs.
+
 ## Troubleshooting
 
 - **Tool calls return 401**: the OAuth session expired. Reconnect from your MCP client to re-authorize.
 - **OAuth redirect loops**: confirm `MCP_BASE_URL` matches the URL your MCP client uses to reach the server.
 - **Wrong partition**: tool calls accept an explicit `partition` arg; if you omit it, the partition is inferred from your access token.
+- **Upload PUT fails (DNS, refused, proxy, timeout)**: the agent's shell can't reach the partition API host. See [Network access](https://hostsmith.net/docs/mcp/network-access).
 - **Inspect the install**: `npx @modelcontextprotocol/inspector npx -y @hostsmith/mcp-server http` to browse tools interactively.
 
 ## Documentation
