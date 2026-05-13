@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.5.1 - 2026-05-13
+#### Bug Fixes
+- (**deploy**) forbid deploy_files fallback and blind retry on upload PUT failure - (7cb0c97) - gp42-ops (GitHub)
+#### Documentation
+- document agent-sandbox egress requirements for uploads - (e6790b7) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.5.0 - 2026-05-12
 #### Features
 - (**deploy**) describe partition-host URL shape and add sandbox-aware failure-recovery flow - (7e9c93b) - gp42-ops (GitHub)
