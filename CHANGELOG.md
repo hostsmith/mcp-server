@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.5.2 - 2026-05-16
+#### Bug Fixes
+- (**prompts**) escalate to user before working around blocked upload egress - (d2ee542) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.5.1 - 2026-05-13
 #### Bug Fixes
 - (**deploy**) forbid deploy_files fallback and blind retry on upload PUT failure - (7cb0c97) - gp42-ops (GitHub)
