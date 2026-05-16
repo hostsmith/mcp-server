@@ -106,7 +106,11 @@ Deploying content:
 - Two paths, pick by file size and type:
   - Use deploy_files for inline text/JSON/HTML you generated yourself, when total payload < ~1 MB. Bytes ship through the MCP server's JSON-RPC channel; subject to a ~6 MB hard ceiling.
   - Use deploy_create_upload + deploy_finalize for binaries (PDF, image, video, zip), files larger than ~1 MB, or any file you have available in your environment but not as inline text. The tools return per-part PUT URLs; bytes flow directly from your environment to the upload endpoint, never through the MCP server. The URL host is either a Hostsmith partition API host (\`us.api.hostsmith.net\` or \`eu.api.hostsmith.net\`) or a direct S3 endpoint - treat both identically (one HTTP PUT per URL, capture the \`ETag\` from each response).
-- If a deploy_create_upload PUT fails with a network/DNS/sandbox/proxy error, do NOT fall back to deploy_files (payload exceeds its cap) and do NOT retry blindly. Stop and surface deploy_create_upload's allowlist-recovery instructions; retry only after the user confirms the egress rule.
+- If a deploy_create_upload PUT fails with a network/DNS/sandbox/proxy error, follow this escalation order. Do NOT improvise around it:
+  1. **Ask the user to enable egress** for the URL's host (preferred). The sandbox blocking is an environment setting the user can change; surface deploy_create_upload's allowlist-recovery instructions and wait for confirmation.
+  2. **If the user declines or cannot change the sandbox**, present the presigned URL(s) verbatim and ask them to upload the file themselves (curl, browser, etc.), then call deploy_finalize after they confirm.
+  3. **Never** base64-embed, data-URI, or otherwise inline binary content into HTML/CSS/JSON/other deployed files to bypass the upload path. It bloats the page, breaks browser caching, reships on every deploy, and hides the real problem from the user. Do NOT fall back to deploy_files for the same reason (payload exceeds its cap and the workaround is itself the anti-pattern).
+- When you notice yourself reasoning "the sandbox blocks X, so I'll route around it," stop and escalate to the user instead. Sandbox constraints are signals to ask, not puzzles to solve silently.
 - Read or generate the content client-side (in your own environment) - the MCP server has no access to the user's local filesystem.
 - The site must exist first; call create_site if no siteId is available.
 
@@ -386,7 +390,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
 
   server.tool(
     "deploy_files",
-    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist - call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it - confirm overwrite with the user first.",
+    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist - call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it - confirm overwrite with the user first.\n\n**Anti-pattern:** do not use this tool to ship binaries (images, PDFs, video, fonts, zips) by base64-embedding or data-URI inlining them into HTML/CSS/JSON. Binaries belong on `deploy_create_upload`. If that path is blocked by sandbox/network, escalate to the user (ask them to enable egress, or offer manual upload of the presigned URL) - never reach for this tool as a workaround. Inlining bloats pages, breaks browser caching, and reships the bytes on every deploy.",
     {
       siteId: z
         .string()
@@ -489,9 +493,19 @@ Three-step protocol:
 
 The site must already exist - call \`create_site\` first if you do not have a \`siteId\`. Deploying overwrites existing content; confirm overwrite with the user first.
 
-If your host environment provides no HTTP-PUT capability (no bash/curl, no Python \`requests\`, no \`fetch\`), present the URL(s) to the user with instructions to upload the file manually (curl or browser), then call \`deploy_finalize\` after the user confirms.
+**Anti-patterns - never do these to bypass a blocked or unavailable upload path:**
+- Do NOT base64-embed, data-URI, or otherwise inline binary content (images, PDFs, video, fonts, zips) into HTML/CSS/JSON or any other deployed file. Inlining bloats the page, breaks browser caching, reships the bytes on every redeploy, and hides the real environment problem from the user.
+- Do NOT fall back to \`deploy_files\` for a binary that was meant for \`deploy_create_upload\` - the payload exceeds \`deploy_files\`' cap and the workaround is itself an anti-pattern.
+- Do NOT silently downscale, recompress, or otherwise mutate the user's file to fit a smaller path - ask first.
+When the upload path is unavailable, surface it to the user using the escalation order below.
 
-If a PUT fails with a network/DNS error (connection refused, name resolution failure, timeout, sandbox-denied, proxy 403/407), the sandbox is blocking egress to the URL's host. **Do NOT fall back to \`deploy_files\`** - if you were using \`deploy_create_upload\`, the payload is by definition larger than what \`deploy_files\` accepts (>1 MB / binary), so the fallback will fail too. **Do NOT retry the PUT without changes** - a sandbox denial does not resolve on its own. **STOP and ask the user to add the egress allowlist rule below**, then retry the failed PUT only after the user confirms the rule is in place. Recovery flow:
+**Recovery escalation order** when a PUT fails with a network/DNS error (connection refused, name resolution failure, timeout, sandbox-denied, proxy 403/407) OR your host environment has no HTTP-PUT capability at all (no bash/curl, no Python \`requests\`, no \`fetch\`). **Do NOT retry blindly** - a sandbox denial does not resolve on its own.
+
+1. **Ask the user to enable egress (preferred fix).** This is the cheapest option and unblocks all future uploads. Surface the exact sandbox configuration below and wait for the user to confirm before retrying. Most users can flip this setting in seconds; do not skip to step 2 without asking.
+2. **If the user declines, cannot change the sandbox, or has no HTTP-PUT capability in-environment**, present the failing presigned URL(s) verbatim and ask them to upload the file themselves (curl one-liner, browser, or any HTTP client they have). Provide a copy-pasteable command. Call \`deploy_finalize\` only after the user confirms each PUT returned 200 with an ETag (they will need to share the ETags back for multi-part uploads).
+3. **Never** route around the failure by base64-inlining the file into another deploy, recompressing, or falling back to \`deploy_files\`. See anti-patterns above.
+
+Egress allowlist instructions for step 1:
   1. Read the failing URL's hostname. It will be either \`us.api.hostsmith.net\`, \`eu.api.hostsmith.net\`, or an S3 endpoint (copy verbatim from the failing URL).
   2. Infer the sandbox and give the user the exact configuration snippet:
      - **Cursor** (signal: cwd contains \`.cursor/\`, or \`CURSOR_*\` env vars) - edit \`~/.cursor/sandbox.json\` (user scope) or \`<repo>/.cursor/sandbox.json\` (repo scope):
