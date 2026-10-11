@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.6.0 - 2026-10-11
+#### Features
+- (**http**) add onServer hook to createFetchHandler - (42b5984) - gp42-ops (GitHub)
+- identify the server in the User-Agent of API calls - (cb7cf7e) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.5.2 - 2026-05-16
 #### Bug Fixes
 - (**prompts**) escalate to user before working around blocked upload egress - (d2ee542) - gp42-ops (GitHub)
