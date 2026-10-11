@@ -146,6 +146,8 @@ The one place sandboxed agents commonly fail is the **upload PUT** during `deplo
 
 Sandbox-specific snippets (Cursor `sandbox.json`, Claude Code `settings.json`, Codex `config.toml`, generic firewall guidance) live in the [Network access](https://hostsmith.net/docs/mcp/network-access) docs.
 
+The server's own calls to the Hostsmith API identify themselves with `User-Agent: hostsmith-mcp-server/<version> hostsmith-js-sdk/<version>`.
+
 ## Troubleshooting
 
 - **Tool calls return 401**: the OAuth session expired. Reconnect from your MCP client to re-authorize.

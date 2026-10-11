@@ -50,16 +50,21 @@ function partitionUrlsFromEnv():
   };
 }
 
+// Product token for the User-Agent of every API call; the SDK appends its
+// own. The public API uses it to tell MCP traffic from direct API clients.
+const USER_AGENT = `hostsmith-mcp-server/${PKG_VERSION}`;
+
 function createClient(token: string, partition?: Partition): Hostsmith {
   const baseUrl = process.env.HOSTSMITH_BASE_URL;
   if (baseUrl) {
-    return new Hostsmith({ accessToken: token, baseUrl });
+    return new Hostsmith({ accessToken: token, baseUrl, userAgent: USER_AGENT });
   }
   // When `partition` is omitted, the SDK infers it from the access
   // token's `homePartition` claim.
   const partitionUrls = partitionUrlsFromEnv();
   return new Hostsmith({
     accessToken: token,
+    userAgent: USER_AGENT,
     ...(partition ? { partition } : {}),
     ...(partitionUrls ? { partitionUrls } : {}),
   });
