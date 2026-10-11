@@ -28,6 +28,7 @@
     "start": "tsx src/cli.ts http",
     "build": "tsc && chmod +x dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "smoke": "node scripts/smoke.mjs",
     "prepublishOnly": "npm run build"
   },

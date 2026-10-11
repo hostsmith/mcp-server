@@ -721,11 +721,27 @@ export function getProtectedResourceMetadata(opts: MetadataOptions) {
   };
 }
 
+export interface OnServerContext {
+  /**
+   * The request's access-token claims, decoded but not verified here (the
+   * public API verifies the token on every tool call).
+   */
+  claims: Record<string, unknown>;
+}
+
 export interface CreateFetchHandlerOptions {
   /** Hostsmith app URL providing the OAuth endpoints (e.g. "https://hostsmith.net"). */
   hostsmithUrl: string;
   /** Public URL where this MCP server is reachable (e.g. "https://mcp.hostsmith.net"). */
   mcpBaseUrl: string;
+  /**
+   * Called for every authenticated MCP request with that request's new
+   * server, before the server handles the request. The handler waits for it;
+   * an error it throws is logged and never changes the response. Meant for
+   * hosted deployments that instrument the server (Hostsmith's hosted Lambda
+   * attaches its analytics here). The package itself sends no telemetry.
+   */
+  onServer?: (server: McpServer, context: OnServerContext) => void | Promise<void>;
 }
 
 function buildBearerError(
@@ -758,7 +774,7 @@ function buildBearerError(
 export function createFetchHandler(
   opts: CreateFetchHandlerOptions,
 ): (req: Request) => Promise<Response> {
-  const { hostsmithUrl, mcpBaseUrl } = opts;
+  const { hostsmithUrl, mcpBaseUrl, onServer } = opts;
 
   const app = new Hono();
   const protectedResourceMetadata = getProtectedResourceMetadata({
@@ -778,7 +794,7 @@ export function createFetchHandler(
 
   function readAuthInfo(
     authorization: string | undefined,
-  ): AuthInfo | Response {
+  ): { authInfo: AuthInfo; claims: Record<string, unknown> } | Response {
     if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
       return buildBearerError(mcpBaseUrl, "unauthorized");
     }
@@ -794,10 +810,13 @@ export function createFetchHandler(
       return buildBearerError(mcpBaseUrl, "token_expired");
     }
     return {
-      token,
-      clientId: (claims.client_id as string) ?? "",
-      scopes: ((claims.scope as string) ?? "").split(" ").filter(Boolean),
-      expiresAt: exp,
+      authInfo: {
+        token,
+        clientId: (claims.client_id as string) ?? "",
+        scopes: ((claims.scope as string) ?? "").split(" ").filter(Boolean),
+        expiresAt: exp,
+      },
+      claims,
     };
   }
 
@@ -818,8 +837,15 @@ export function createFetchHandler(
       sessionIdGenerator: undefined,
     });
     const server = buildServer();
+    if (onServer) {
+      try {
+        await onServer(server, { claims: auth.claims });
+      } catch (err) {
+        console.error("onServer hook failed:", err instanceof Error ? err.message : err);
+      }
+    }
     await server.connect(transport);
-    return transport.handleRequest(c.req.raw, { authInfo: auth });
+    return transport.handleRequest(c.req.raw, { authInfo: auth.authInfo });
   });
 
   return async (req: Request) => app.fetch(req);
