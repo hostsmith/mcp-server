@@ -104,6 +104,27 @@ npx @hostsmith/mcp-server http
 }
 ```
 
+### Embedding the HTTP handler
+
+`createFetchHandler` returns a Web-Standard `(req: Request) => Promise<Response>` handler, for hosting the server in your own runtime (a Lambda, an edge worker, a Node server). It reads no environment variables; pass the configuration:
+
+```ts
+import { createFetchHandler } from "@hostsmith/mcp-server";
+
+const handler = createFetchHandler({
+  hostsmithUrl: "https://hostsmith.net",
+  mcpBaseUrl: "https://mcp.example.com",
+  // Optional: called for every authenticated MCP request with that
+  // request's new McpServer and the access token's decoded claims,
+  // before the server handles the request.
+  onServer: async (server, { claims }) => {
+    // e.g. attach your own instrumentation to `server`
+  },
+});
+```
+
+`onServer` is awaited. If it throws, the error is logged and the request is handled as if there were no hook. The claims are decoded, not verified; the Hostsmith API verifies the token on every tool call. Hostsmith's hosted server at `mcp.hostsmith.net` uses this hook for its usage analytics. The package itself contains no analytics client and sends no telemetry, and the CLI passes no hook.
+
 ## Environment variables
 
 | Variable               | Default                  | Description                                                                                                                                                                                                                                                                                                                       |
@@ -124,6 +145,8 @@ The one place sandboxed agents commonly fail is the **upload PUT** during `deplo
 - `eu.api.hostsmith.net` (for sites in the `eu` partition)
 
 Sandbox-specific snippets (Cursor `sandbox.json`, Claude Code `settings.json`, Codex `config.toml`, generic firewall guidance) live in the [Network access](https://hostsmith.net/docs/mcp/network-access) docs.
+
+The server's own calls to the Hostsmith API identify themselves with `User-Agent: hostsmith-mcp-server/<version> hostsmith-js-sdk/<version>`.
 
 ## Troubleshooting
 
