@@ -5,7 +5,8 @@
 [![Node Version](https://img.shields.io/node/v/@hostsmith/mcp-server)](./package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-0a7bbb.svg)](https://modelcontextprotocol.io)
-[![smithery badge](https://smithery.ai/badge/hostsmith/mcp-server)](https://smithery.ai/servers/hostsmith/mcp-server)
+
+[![Hostsmith MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/io.github.hostsmith/mcp-server/badges/score.svg)](https://glama.ai/mcp/connectors/io.github.hostsmith/mcp-server)
 
 Official [Model Context Protocol](https://modelcontextprotocol.io) server for the [Hostsmith](https://hostsmith.net) hosting platform.
 
