@@ -7,6 +7,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-0a7bbb.svg)](https://modelcontextprotocol.io)
 
 [![Hostsmith MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/io.github.hostsmith/mcp-server/badges/score.svg)](https://glama.ai/mcp/connectors/io.github.hostsmith/mcp-server)
+[![Hostsmith MCP on mcprush](https://mcprush.com/badge/hostsmith-mcp/score.svg)](https://mcprush.com/to/hostsmith-mcp?ref=badge)
 
 Official [Model Context Protocol](https://modelcontextprotocol.io) server for the [Hostsmith](https://hostsmith.net) hosting platform.
 
