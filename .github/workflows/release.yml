@@ -349,6 +349,29 @@ jobs:
         with:
           name: release-bundle
 
+      # npm validates a new version before serving it, and the version URL
+      # answers 404 meanwhile (a few minutes for 1.6.1, flipping between 404
+      # and 200 near the end). The MCP registry refuses a server whose npm
+      # version it can't find, so wait for three 200s in a row. The query
+      # string keeps the registry's CDN from serving a cached 404.
+      - name: Wait for the npm version
+        timeout-minutes: 20
+        run: |
+          PKG=$(jq -r '.packages[] | select(.registryType == "npm") | .identifier' server.json)
+          VERSION=$(jq -r '.version' server.json)
+          URL="https://registry.npmjs.org/${PKG/\//%2f}/${VERSION}"
+          OK=0
+          while [[ $OK -lt 3 ]]; do
+            if [[ "$(curl -s -o /dev/null -w '%{http_code}' "${URL}?t=$(date +%s)")" == "200" ]]; then
+              OK=$((OK + 1))
+            else
+              OK=0
+              echo "Waiting for ${PKG}@${VERSION} on npm..."
+            fi
+            sleep 10
+          done
+          echo "${PKG}@${VERSION} is available on npm."
+
       - name: Install mcp-publisher
         env:
           VER: ${{ env.MCP_PUBLISHER_VERSION }}
