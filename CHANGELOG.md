@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.6.1 - 2026-10-22
+#### Bug Fixes
+- correct the plan and partition rule in server instructions - (3d43855) - gp42-ops (GitHub)
+#### Documentation
+- describe Claude custom connector setup for every Claude app - (4e6175a) - gp42-ops (GitHub)
+- add mcprush badge - (5dc71d0) - gp42-ops (GitHub)
+- update badges - (8279468) - gp42-ops
+- create glama.json - (9f8f8cd) - gp42-ops
+
+- - -
+
 ## v1.6.0 - 2026-10-11
 #### Features
 - (**http**) add onServer hook to createFetchHandler - (42b5984) - gp42-ops (GitHub)
