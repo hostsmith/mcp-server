@@ -102,10 +102,10 @@ Context bootstrap:
 - list_sites changes frequently (any create/delete mutates it). Always re-call before acting on a site reference rather than relying on a cached result.
 
 Partition selection:
-- Pass partition: "eu" when the user signals EU residency or GDPR; otherwise omit partition and let it default to the user's home partition. Ask if unsure.
+- Pass partition: "eu" when the user signals EU residency or GDPR; otherwise omit partition and let it default to the user's home partition (see the plan rule below). Ask if unsure.
 
 Plans and limits:
-- Free, Basic, and Standard plans only allow sites in the user's home partition. Creating a site in a non-home partition on those plans returns the API error "Site limit reached for current plan" - only Premium and above can host sites across partitions. Do not pre-emptively refuse cross-partition requests; attempt the call and surface that error verbatim so the user knows they need to upgrade.
+- Free, Starter and Pro plans can only create sites in the "us" partition, whatever the user's home partition (get_account shows plan.dataResidencySelector: false). For those users, pass partition: "us" when creating a site unless they asked for another partition. Creating a site outside "us" on those plans returns the API error "Site limit reached for current plan" - only Agency and Premium can host sites in other partitions. Do not pre-emptively refuse a request for another partition; attempt the call and surface that error verbatim so the user knows they need to upgrade.
 
 Deploying content:
 - Two paths, pick by file size and type:
