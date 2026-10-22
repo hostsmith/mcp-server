@@ -11,7 +11,7 @@
 
 Official [Model Context Protocol](https://modelcontextprotocol.io) server for the [Hostsmith](https://hostsmith.net) hosting platform.
 
-**Static hosting for agents - give it a file, get a live URL.** Claude Code shipping an HTML report. Cursor previewing a generated demo. Claude Desktop publishing a one-pager. One MCP call → public HTTPS URL in seconds. No repo, no CI, no build step. Custom domains, private sites, EU or US data residency.
+**Static hosting for agents - give it a file, get a live URL.** Claude Code shipping an HTML report. Cursor previewing a generated demo. Claude publishing a one-pager from claude.ai or Desktop. One MCP call → public HTTPS URL in seconds. No repo, no CI, no build step. Custom domains, private sites, EU or US data residency.
 
 ![Deploy a page from Claude Code and get a live URL](./demo.gif)
 
@@ -39,15 +39,24 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 
 Authentication is via OAuth 2.0. Static access tokens are not supported.
 
-### Claude Desktop
+### Claude (claude.ai, Desktop, Cowork, mobile)
 
-Open **Settings → Connectors → Add custom connector** and enter:
+Add Hostsmith once as a custom connector and it works in every Claude app on your account.
 
-```
-https://mcp.hostsmith.net/mcp
-```
+1. In Claude, open **Customize > Connectors**, click **+ Add**, then **Add custom connector**.
+2. Enter `Hostsmith` as the name and paste the MCP server URL:
 
-Claude Desktop runs the OAuth flow in your browser to authorize the connector against your Hostsmith account.
+   ```
+   https://mcp.hostsmith.net/mcp
+   ```
+
+3. Click **Continue**, finish adding the connector, then connect it. Claude opens Hostsmith in your browser to authorize the connector against your Hostsmith account.
+
+Free Claude plans allow one custom connector. On Team and Enterprise plans, an owner adds the connector under **Organization settings > Connectors**, and each member then clicks **Connect** next to Hostsmith under **Customize > Connectors** to sign in with their own Hostsmith account.
+
+Claude asks for your approval before each tool call. To change that, open Hostsmith under **Customize > Connectors** and set its **Tool permissions**.
+
+To revoke, open Hostsmith under **Customize > Connectors**, click **⋯**, then **Remove** (Team and Enterprise owners: **Organization settings > Connectors**). To force a re-auth, click **Disconnect**, then **Connect**.
 
 ### Stdio (Claude Code, Cursor, Cline, Windsurf, Zed)
 
@@ -81,6 +90,12 @@ Any MCP client that supports remote Streamable HTTP transport can point directly
 ```
 
 The client handles the OAuth flow automatically - you'll be redirected to Hostsmith to authorize access.
+
+Claude Code can use the hosted server directly too:
+
+```bash
+claude mcp add --transport http hostsmith https://mcp.hostsmith.net/mcp
+```
 
 ### Cursor (one-click install)
 
