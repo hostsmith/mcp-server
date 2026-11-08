@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.6.2 - 2026-11-08
+#### Bug Fixes
+- every plan creates sites in both partitions - (9d3d5b6) - gp42-ops (GitHub)
+#### Continuous Integration
+- wait for the npm version before publishing to the MCP registry - (dc2b1da) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.6.1 - 2026-10-22
 #### Bug Fixes
 - correct the plan and partition rule in server instructions - (3d43855) - gp42-ops (GitHub)
