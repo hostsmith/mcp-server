@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.6.3 - 2026-11-09
+#### Bug Fixes
+- report the organization's site count once in get_account - (4721485) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.6.2 - 2026-11-08
 #### Bug Fixes
 - every plan creates sites in both partitions - (9d3d5b6) - gp42-ops (GitHub)
