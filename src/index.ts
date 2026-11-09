@@ -231,7 +231,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     "get_account",
-    "Get the user's account: organization details (`orgId`, `orgName`), the calling user's home partition under `user.homePartition`, current subscription plan with its limits (max sites, max domains, storage, bandwidth), and current usage counts. Use to check how much headroom the user has before creating new sites or to confirm plan-tier features. Usage is summed across all partitions.",
+    "Get the user's account: organization details (`orgId`, `orgName`), the calling user's home partition under `user.homePartition`, current subscription plan with its limits (max sites, max domains, storage, bandwidth), and current usage counts. Use to check how much headroom the user has before creating new sites or to confirm plan-tier features. Usage covers every partition: the site and storage counts are the organization's, and custom domains are added up from each partition.",
     {},
     { title: "Get account", readOnlyHint: true },
     async (_params, extra) => {
@@ -245,10 +245,11 @@ export function buildServer(): McpServer {
           }),
         );
 
-        // Use the first partition's account as base, sum usage across partitions.
+        // Use the first partition's account as base. Every partition answers
+        // the organization's site and storage counts; custom domains are
+        // counted per partition, so add them up.
         const base = results[0].account;
         for (let i = 1; i < results.length; i++) {
-          base.usage.sites += results[i].account.usage.sites;
           base.usage.domains += results[i].account.usage.domains;
         }
 
