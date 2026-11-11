@@ -23,6 +23,29 @@ const partitionSchema = z
     'Hostsmith data partition: "us" (United States) or "eu" (European Union)',
   );
 
+// A redirect rule as the redirect tools take it. The status isn't limited
+// here: the API refuses a wrong one with the rule's position, as it does
+// every other mistake, so the tools answer the API's errors unchanged.
+const redirectRuleShape = {
+  from: z
+    .string()
+    .describe(
+      "Source path: exact (`/old-page`), with `:name` placeholders (`/blog/:year/:slug`), or ending in `/*` (`/docs/*`). No query string.",
+    ),
+  to: z
+    .string()
+    .describe(
+      "Destination: a path starting with `/`, or an http(s) URL. `:splat` fills in what `*` matched, and `:name` a placeholder's value. The request's query string is carried over.",
+    ),
+  status: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "301, 302, 303, 307 or 308. Defaults to 301, a permanent move. Use 302 or 307 for a temporary one.",
+    ),
+};
+
 // HOSTSMITH_API_DOMAIN overrides the SDK's hardcoded hostsmith.net domain
 // across both partitions (e.g. "hostsmith.net" →
 // "https://us.api.hostsmith.net", "https://eu.api.hostsmith.net").
@@ -72,7 +95,10 @@ function createClient(token: string, partition?: Partition): Hostsmith {
 
 function formatError(err: unknown): string {
   if (err instanceof ApiError) {
-    return `API error ${err.status} (${err.errorCode}): ${err.message}`;
+    // The refusal's other fields, such as invalid rules with their positions,
+    // so an agent can correct its call without a person
+    const details = err.details ? `\n${JSON.stringify(err.details, null, 2)}` : "";
+    return `API error ${err.status} (${err.errorCode}): ${err.message}${details}`;
   }
   if (err instanceof Error) return err.message;
   return String(err);
@@ -682,6 +708,333 @@ Egress allowlist instructions for step 1:
               text: `Deploy finalized for ${url}. Version: ${versionId}, Status: ${result.status}`,
             },
           ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "list_redirects",
+    "List a site's redirect rules in the order they are checked; the first match answers. User rules come first: `managedBy: \"user\"`, each with an `id`, kept on the hostname and changed with the redirect tools. Then the live deploy's `_redirects` rules: `managedBy: \"file\"`, each with its `line`, changed only by deploying a new `_redirects`. A file rule with `shadowedBy` never answers, because a user rule for the same path comes first. Returns `version`, which `set_redirects` and `edit_redirects` take to refuse a change if the rules changed since; `total` and a page of at most 1,000 rules from `offset`; the file's report, with the lines it skipped and why, and whether it is `enabled`; and the limits. Redirects apply only on the organization's own custom domains: on a shared domain the report says `notApplied: \"CUSTOM_DOMAIN_REQUIRED\"`.",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("Position of the first rule to return, from 0. Defaults to 0."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .optional()
+        .describe("Rules to return, at most and by default 1,000."),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "List redirects", readOnlyHint: true },
+    async ({ siteId, offset, limit, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.redirects.list(siteId, { offset, limit });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "set_redirects",
+    "Replace all of a site's user redirect rules in one call, all or nothing: pass either `rules` or `text` in the `_redirects` format, one `from to [status]` per line. Use this, or `edit_redirects`, for bulk work, such as moving a list of redirects from another host, rather than many `add_redirect` calls. Rules are checked in the order given, before the live deploy's file rules, and the status defaults to 301. A rule sent with the `id` of an existing rule keeps it. Pass the `version` from `list_redirects` to refuse the change if the rules changed since: the error is `StaleVersion`, with the latest version, so read the rules again and reapply the change. One invalid rule refuses the call with `InvalidRules`, listing each error by the rule's `index` or the text's `line`. The file rules don't change. Redirects apply only on the organization's own custom domains (`CustomDomainRequired` otherwise). Visitors get the change within about 5 minutes. Rules left out are deleted, and an empty list deletes them all: confirm with the user before dropping rules.",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      rules: z
+        .array(
+          z.object({
+            id: z
+              .string()
+              .optional()
+              .describe("An existing rule's id, to keep it."),
+            ...redirectRuleShape,
+          }),
+        )
+        .optional()
+        .describe("The new list, in the order rules are checked. Pass this or `text`."),
+      text: z
+        .string()
+        .optional()
+        .describe(
+          "The new list in the `_redirects` format, one `from to [status]` per line, such as `/old /new 301`. Pass this or `rules`.",
+        ),
+      version: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "The `version` the rules were read at, from `list_redirects`. Omit to replace whatever the latest list is.",
+        ),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "Replace redirects", destructiveHint: true, idempotentHint: true },
+    async ({ siteId, rules, text, version, partition }, extra) => {
+      if ((rules === undefined) === (text === undefined)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Pass either `rules` or `text`, not both and not neither.",
+            },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.redirects.set(
+          siteId,
+          rules !== undefined ? { rules } : { text: text! },
+          { version },
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "edit_redirects",
+    "Apply a batch of adds, updates and deletes to a site's user redirect rules, in order, as one change: all of them or none. Use this, or `set_redirects`, for bulk work rather than many single calls. Rule ids come from `list_redirects` and start with `r_`. File rules can't be changed here: an operation naming a file rule's line answers `FileRule`, with the `line` and the operation's `index`. Pass the `version` from `list_redirects` to refuse the batch if the rules changed since (`StaleVersion`, with the latest version). One invalid rule refuses the batch with `InvalidRules`, listing each error by the operation's `index`. Redirects apply only on the organization's own custom domains (`CustomDomainRequired` otherwise). Visitors get the change within about 5 minutes.",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      operations: z
+        .array(
+          z.discriminatedUnion("op", [
+            z.object({
+              op: z.literal("add"),
+              rule: z.object(redirectRuleShape),
+              position: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe("Where to add the rule among the user rules, from 0. Defaults to the end."),
+            }),
+            z.object({
+              op: z.literal("update"),
+              id: z.string().describe("The rule's id."),
+              rule: z.object(redirectRuleShape),
+            }),
+            z.object({
+              op: z.literal("delete"),
+              id: z.string().describe("The rule's id."),
+            }),
+          ]),
+        )
+        .min(1)
+        .describe("Applied in order, each to the list the ones before it left."),
+      version: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "The `version` the rules were read at, from `list_redirects`. Omit to apply the batch to whatever the latest list is.",
+        ),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "Edit redirects", destructiveHint: true },
+    async ({ siteId, operations, version, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.redirects.edit(siteId, operations, { version });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "add_redirect",
+    "Add one user redirect rule to a site, such as forwarding a moved page to its new path. User rules are checked before the live deploy's `_redirects`, in list order: the rule goes at the end of the user rules, or at `position`. The status defaults to 301, a permanent move. It is added to the latest list, without a version. Returns the rule with its `id`, and the new version. Visitors get it within about 5 minutes; check it with `test_redirect`. Each call is a separate save, so for more than a few rules use `set_redirects` or `edit_redirects`. Redirects apply only on the organization's own custom domains (`CustomDomainRequired` otherwise).",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      ...redirectRuleShape,
+      position: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("Where to add the rule among the user rules, from 0. Defaults to the end."),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "Add redirect", destructiveHint: false },
+    async ({ siteId, from, to, status, position, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.redirects.add(siteId, { from, to, status, position });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "delete_redirect",
+    "Delete one user redirect rule by its `id`, from `list_redirects`. File rules can't be deleted this way: naming a file rule's line answers `FileRule` with the line. Change the deploy's `_redirects` instead, or switch the file rules off with `switch_file_redirects`. To delete several rules, use `edit_redirects` or `set_redirects`. Visitors stop being redirected within about 5 minutes.",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      ruleId: z
+        .string()
+        .describe("The user rule's id, starting with `r_`."),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "Delete redirect", destructiveHint: true },
+    async ({ siteId, ruleId, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        await client.sites.redirects.delete(siteId, ruleId);
+        return {
+          content: [{ type: "text", text: `Deleted redirect rule ${ruleId} from site ${siteId}.` }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "switch_file_redirects",
+    "Switch the live deploy's `_redirects` rules off, or back on, without a deploy, for example when a deployed file sends visitors to the wrong place. User rules keep applying either way. The switch lasts until it is turned back on or the next deploy goes live. Visitors get the change within about 5 minutes. Answers `NoFileRules` when the live deploy has no `_redirects`. Confirm with the user before switching the file rules off.",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      enabled: z
+        .boolean()
+        .describe("False to stop the file rules, true to apply them again."),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "Switch file redirects", destructiveHint: true, idempotentHint: true },
+    async ({ siteId, enabled, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.redirects.setFileRules(siteId, enabled);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: formatError(err) }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "test_redirect",
+    "Test a path against a site's redirect rules, as the site would answer it: the rule that matches, with its `status` and the `location` visitors are sent to, or `match: null` when the path is served as is. Tests the live rules by default. To check a change before saving or deploying it, pass `draftRules` to test in place of the saved user rules, or `draftText` to test in place of the live deploy's `_redirects`. A draft's errors are listed by `index` or `line`, and its valid rules are still tested. Nothing is saved.",
+    {
+      siteId: z
+        .string()
+        .describe("The site ID (from `list_sites`)."),
+      path: z
+        .string()
+        .describe("The path to test, starting with `/`, with an optional query string, such as `/old-page?ref=mail`."),
+      draftRules: z
+        .array(
+          z.object({
+            id: z.string().optional().describe("An existing rule's id."),
+            ...redirectRuleShape,
+          }),
+        )
+        .optional()
+        .describe("User rules to test in place of the saved ones."),
+      draftText: z
+        .string()
+        .optional()
+        .describe("`_redirects` text to test in place of the live deploy's file."),
+      partition: partitionSchema
+        .optional()
+        .describe(
+          "Data partition the site lives in. Omit to use the user's home partition.",
+        ),
+    },
+    { title: "Test redirect", readOnlyHint: true },
+    async ({ siteId, path, draftRules, draftText, partition }, extra) => {
+      try {
+        const client = createClient(getToken(extra), partition);
+        const result = await client.sites.redirects.test(siteId, { path, draftRules, draftText });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
       } catch (err) {
         return {
