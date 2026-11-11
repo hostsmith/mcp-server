@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.7.0 - 2026-11-11
+#### Features
+- redirect tools - (9a23303) - gp42-ops (GitHub)
+#### Miscellaneous Chores
+- (**deps**) require @hostsmith/sdk 1.5.0 for the redirect calls - (55c9922) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.6.3 - 2026-11-09
 #### Bug Fixes
 - report the organization's site count once in get_account - (4721485) - gp42-ops (GitHub)
