@@ -23,17 +23,26 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 
 ## Tools
 
-| Tool                   | Description                                                  |
-| ---------------------- | ------------------------------------------------------------ |
-| `list_sites`           | List all sites in your account for a given data partition    |
-| `get_site`             | Get details of a specific site                               |
-| `create_site`          | Create a new site                                            |
-| `delete_site`          | Delete a site                                                |
-| `list_domains`         | List available domains (shared and custom)                   |
-| `get_account`          | Get account info, subscription plan, and usage               |
-| `deploy_files`         | Deploy inline file contents to a site                        |
-| `deploy_create_upload` | Start a direct upload for binaries / large files             |
-| `deploy_finalize`      | Commit a deploy started with `deploy_create_upload`          |
+| Tool                    | Description                                                  |
+| ----------------------- | ------------------------------------------------------------ |
+| `list_sites`            | List all sites in your account for a given data partition    |
+| `get_site`              | Get details of a specific site                               |
+| `create_site`           | Create a new site                                            |
+| `delete_site`           | Delete a site                                                |
+| `list_domains`          | List available domains (shared and custom)                   |
+| `get_account`           | Get account info, subscription plan, and usage               |
+| `deploy_files`          | Deploy inline file contents to a site                        |
+| `deploy_create_upload`  | Start a direct upload for binaries / large files             |
+| `deploy_finalize`       | Commit a deploy started with `deploy_create_upload`          |
+| `list_redirects`        | List a site's redirect rules, in the order they are checked  |
+| `set_redirects`         | Replace a site's user redirect rules, from rules or `_redirects` text |
+| `edit_redirects`        | Add, update and delete user redirect rules in one batch      |
+| `add_redirect`          | Add one user redirect rule                                   |
+| `delete_redirect`       | Delete one user redirect rule                                |
+| `switch_file_redirects` | Switch the live deploy's `_redirects` rules off or back on   |
+| `test_redirect`         | Test a path against the live or draft redirect rules         |
+
+Redirects apply only on your organization's own custom domains. User rules, kept on the hostname and changed through these tools, are checked before the live deploy's `_redirects`.
 
 ## Usage
 
