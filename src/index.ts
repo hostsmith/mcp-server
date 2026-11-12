@@ -135,8 +135,7 @@ Plans and limits:
 - When a plan's site limit is reached, creating a site returns the API error "Site limit reached for current plan". Surface it verbatim so the user knows they need to delete a site or upgrade.
 
 Redirect hosts:
-- To forward a hostname that has no content of its own, such as a retired domain or a campaign link like go.example.com, create a redirect host: create_site with kind: "redirect", then set its rules with set_redirects or add_redirect. Don't deploy a placeholder page to redirect from.
-- A redirect host needs one of the organization's own custom domains (CustomDomainRequired on a shared domain) and takes no files: the deploy tools answer RedirectHostHasNoFiles. It doesn't count toward the plan's site limit; an organization can have up to 50 (RedirectHostLimitReached).
+- To forward a hostname with no content of its own, such as a retired domain or a campaign link, create a redirect host (create_site with kind: "redirect") and set its rules with set_redirects or add_redirect, rather than deploying a placeholder page.
 
 Deploying content:
 - Two paths, pick by file size and type:
