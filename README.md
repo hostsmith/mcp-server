@@ -27,7 +27,7 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 | ----------------------- | ------------------------------------------------------------ |
 | `list_sites`            | List all sites in your account for a given data partition    |
 | `get_site`              | Get details of a specific site                               |
-| `create_site`           | Create a new site                                            |
+| `create_site`           | Create a new site, or a redirect host                        |
 | `delete_site`           | Delete a site                                                |
 | `list_domains`          | List available domains (shared and custom)                   |
 | `get_account`           | Get account info, subscription plan, and usage               |
@@ -43,6 +43,8 @@ Official [Model Context Protocol](https://modelcontextprotocol.io) server for th
 | `test_redirect`         | Test a path against the live or draft redirect rules         |
 
 Redirects apply only on your organization's own custom domains. User rules, kept on the hostname and changed through these tools, are checked before the live deploy's `_redirects`.
+
+To forward a hostname with no content of its own, such as a retired domain or a campaign link, create a redirect host: `create_site` with `kind: "redirect"`, then add its rules. A redirect host serves only its rules and takes no deploys. It doesn't count toward your plan's site limit; an organization can have up to 50.
 
 ## Usage
 

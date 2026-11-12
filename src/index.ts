@@ -134,6 +134,9 @@ Plans and limits:
 - Every plan, Free included, can create sites in both the "us" and the "eu" partition. Pass partition: "eu" when the user asks for the EU or GDPR; otherwise omit it, and the site goes to the user's home partition.
 - When a plan's site limit is reached, creating a site returns the API error "Site limit reached for current plan". Surface it verbatim so the user knows they need to delete a site or upgrade.
 
+Redirect hosts:
+- To forward a hostname with no content of its own, such as a retired domain or a campaign link, create a redirect host (create_site with kind: "redirect") and set its rules with set_redirects or add_redirect, rather than deploying a placeholder page.
+
 Deploying content:
 - Two paths, pick by file size and type:
   - Use deploy_files for inline text/JSON/HTML you generated yourself, when total payload < ~1 MB. Bytes ship through the MCP server's JSON-RPC channel; subject to a ~6 MB hard ceiling.
@@ -176,7 +179,7 @@ export function buildServer(): McpServer {
 
   server.tool(
     "list_sites",
-    'List Hostsmith sites in the user\'s account. Returns each site\'s `siteId`, `subdomain`, `domain`, and current status - feed `siteId` into `get_site`, `deploy_files`, `deploy_create_upload`, or `delete_site`. This is the source of truth for "does the user already have a site at FQDN X" - call it before any create/deploy/delete to resolve the user\'s site reference. By default queries all data partitions and merges the results; pass `partition: "us"` or `"eu"` to limit the query.',
+    'List Hostsmith sites in the user\'s account. Returns each site\'s `siteId`, `subdomain`, `domain`, `kind` (`"redirect"` for a redirect host, which takes no deploys) and current status - feed `siteId` into `get_site`, `deploy_files`, `deploy_create_upload`, or `delete_site`. This is the source of truth for "does the user already have a site at FQDN X" - call it before any create/deploy/delete to resolve the user\'s site reference. By default queries all data partitions and merges the results; pass `partition: "us"` or `"eu"` to limit the query.',
     {
       partition: partitionSchema
         .optional()
@@ -327,7 +330,9 @@ export function buildServer(): McpServer {
 
 \`domain\` MUST be one of the domains returned by \`list_domains\` for this user - never invent or assume one. The selected domain must be in \`active\` status; if it isn't, surface the problem to the user instead of attempting creation. \`partition\` passed to this tool MUST match the partition of the selected domain.
 
-Subdomain selection must respect the domain's capabilities from \`list_domains\`. To serve the bare apex, pass \`subdomain: "www"\` - only valid when the domain has \`enableApexDomain: true\` (typically custom domains the user owns). For any other subdomain, the domain must have \`enableSubdomains: true\`; shared hosting domains (e.g. \`*.hostsmith.link\`) and most custom domains have \`enableApexDomain: false\`, so a non-apex subdomain is required there. If the chosen domain doesn't support the kind of site the user asked for (apex vs subdomain), surface the conflict rather than silently picking something else.`,
+Subdomain selection must respect the domain's capabilities from \`list_domains\`. To serve the bare apex, pass \`subdomain: "www"\` - only valid when the domain has \`enableApexDomain: true\` (typically custom domains the user owns). For any other subdomain, the domain must have \`enableSubdomains: true\`; shared hosting domains (e.g. \`*.hostsmith.link\`) and most custom domains have \`enableApexDomain: false\`, so a non-apex subdomain is required there. If the chosen domain doesn't support the kind of site the user asked for (apex vs subdomain), surface the conflict rather than silently picking something else.
+
+Pass \`kind: "redirect"\` to create a redirect host instead of a site: it serves only redirect rules, set afterwards with \`set_redirects\` or \`add_redirect\`, and takes no deploys. Its domain must be a custom domain the organization owns (\`shared: false\` in \`list_domains\`). On a domain with \`enableApexDomain: true\`, a redirect host at \`subdomain: "www"\` also forwards the bare apex, which first redirects to \`www\` and then follows the host's rules.`,
     {
       domain: z
         .string()
@@ -349,12 +354,18 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
         .describe(
           "Data partition for the new site. Must match the partition of the selected domain.",
         ),
+      kind: z
+        .enum(["site", "redirect"])
+        .optional()
+        .describe(
+          'Omit, or pass "site", for a site that serves deployed files. Pass "redirect" for a redirect host: it serves only redirect rules, needs a custom domain the organization owns, and doesn\'t count toward the plan\'s site limit (up to 50 per organization). Fixed at creation.',
+        ),
     },
     { title: "Create site", destructiveHint: true },
-    async ({ domain, subdomain, partition }, extra) => {
+    async ({ domain, subdomain, partition, kind }, extra) => {
       try {
         const client = createClient(getToken(extra), partition);
-        const result = await client.sites.create({ domain, subdomain });
+        const result = await client.sites.create({ domain, subdomain, kind });
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
@@ -423,7 +434,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
 
   server.tool(
     "deploy_files",
-    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist - call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it - confirm overwrite with the user first.\n\n**Anti-pattern:** do not use this tool to ship binaries (images, PDFs, video, fonts, zips) by base64-embedding or data-URI inlining them into HTML/CSS/JSON. Binaries belong on `deploy_create_upload`. If that path is blocked by sandbox/network, escalate to the user (ask them to enable egress, or offer manual upload of the presigned URL) - never reach for this tool as a workaround. Inlining bloats pages, breaks browser caching, and reships the bytes on every deploy.",
+    "Publish in-memory file contents to a Hostsmith site without writing to disk. Use when you have just generated content (an HTML page, a report, JSON data) and the user wants it live. Returns the deployment version and status; call `get_site` afterwards if you need the public URL to share. The site must already exist - call `create_site` first if you do not have a `siteId`. Deploying to a site that already has content overwrites it - confirm overwrite with the user first. A redirect host (`kind: \"redirect\"`) takes no files and answers `RedirectHostHasNoFiles`: change its rules with the redirect tools instead.\n\n**Anti-pattern:** do not use this tool to ship binaries (images, PDFs, video, fonts, zips) by base64-embedding or data-URI inlining them into HTML/CSS/JSON. Binaries belong on `deploy_create_upload`. If that path is blocked by sandbox/network, escalate to the user (ask them to enable egress, or offer manual upload of the presigned URL) - never reach for this tool as a workaround. Inlining bloats pages, breaks browser caching, and reships the bytes on every deploy.",
     {
       siteId: z
         .string()
@@ -478,7 +489,7 @@ Subdomain selection must respect the domain's capabilities from \`list_domains\`
 
   server.tool(
     "deploy_create_upload",
-    `Start a direct-to-S3 upload for binary or large files. Use this instead of \`deploy_files\` for binaries (PDF, image, video, zip) or any file > ~1 MB. The MCP server has no access to the user's filesystem and \`deploy_files\` ships content inline through Lambda (capped at ~6 MB JSON-RPC payloads); this tool returns presigned S3 PUT URLs so the file bytes flow directly from your environment to S3, never through the MCP server.
+    `Start a direct-to-S3 upload for binary or large files. Use this instead of \`deploy_files\` for binaries (PDF, image, video, zip) or any file > ~1 MB. The MCP server has no access to the user's filesystem and \`deploy_files\` ships content inline through Lambda (capped at ~6 MB JSON-RPC payloads); this tool returns presigned S3 PUT URLs so the file bytes flow directly from your environment to S3, never through the MCP server. A redirect host (\`kind: "redirect"\`) takes no files and answers \`RedirectHostHasNoFiles\`.
 
 **Bundle into a zip first when:** the upload contains more than 3 files OR any file is larger than ~1 MB. The fileWorker auto-extracts a single-zip upload after promotion, so subdirectories are preserved end-to-end and you avoid one PUT round-trip per file. Skip zipping only for the trivial single-small-file case (e.g. one HTML).
 
