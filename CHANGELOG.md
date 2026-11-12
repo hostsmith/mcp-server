@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.8.0 - 2026-11-12
+#### Features
+- shorten the redirect host instructions - (7a6d7d2) - gp42-ops (GitHub)
+- create_site takes a kind for redirect hosts - (47c449d) - gp42-ops (GitHub)
+#### Miscellaneous Chores
+- (**deps**) require @hostsmith/sdk 1.6.0 for kind on sites.create - (97e91d1) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.7.0 - 2026-11-11
 #### Features
 - redirect tools - (9a23303) - gp42-ops (GitHub)
