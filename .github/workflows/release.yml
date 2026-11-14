@@ -36,6 +36,10 @@ jobs:
     if: >-
       (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore(version):'))
       || github.event_name == 'workflow_dispatch'
+    # The App credentials live in the `release` environment, which only main
+    # can use. Only the stable path (push to main) needs them; prereleases
+    # from other branches and tag pushes run without the environment.
+    environment: ${{ (github.event_name == 'push' && github.ref_type != 'tag') && 'release' || '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
