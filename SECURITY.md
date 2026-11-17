@@ -4,7 +4,7 @@
 
 If you believe you've found a security issue in `@hostsmith/mcp-server`, please report it privately.
 
-Email: **security@ops42.org**
+Email: **security@hostsmith.net**
 
 Please include:
 
