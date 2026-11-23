@@ -6,6 +6,7 @@ import type { Partition } from "@hostsmith/sdk";
 import { z } from "zod";
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { MCP_SERVER_CARD_PATH, getServerCard } from "./serverCard.js";
 
 export const PKG_VERSION: string = (() => {
@@ -93,7 +94,42 @@ function createClient(token: string, partition?: Partition): Hostsmith {
   });
 }
 
+// The tool call a refusal belongs to, for its log line: set by the wrapper
+// around every tool in buildServer
+type ToolCallContext = { tool: string; siteId?: string; orgIdPrefix?: string };
+const toolCall = new AsyncLocalStorage<ToolCallContext>();
+
+// The first 8 characters of the token's org id, never the token
+function orgIdPrefix(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  try {
+    const org = decodeJwtPayload(token).org;
+    return typeof org === "string" ? org.slice(0, 8) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * One JSON line for every tool error: the tool, the API's status and error
+ * code, the site id and the org id prefix. Never the message or the
+ * arguments, which can quote the user's content.
+ */
+export function logToolError(err: unknown, context = toolCall.getStore()): void {
+  const line = {
+    level: "warn",
+    msg: "tool error",
+    tool: context?.tool,
+    status: err instanceof ApiError ? err.status : undefined,
+    code: err instanceof ApiError ? err.errorCode : err instanceof Error ? err.name : "unknown",
+    siteId: context?.siteId,
+    orgIdPrefix: context?.orgIdPrefix,
+  };
+  console.warn(JSON.stringify(line));
+}
+
 function formatError(err: unknown): string {
+  logToolError(err);
   if (err instanceof ApiError) {
     // The refusal's other fields, such as invalid rules with their positions,
     // so an agent can correct its call without a person
@@ -176,6 +212,22 @@ export function buildServer(): McpServer {
       instructions: SERVER_INSTRUCTIONS,
     },
   );
+
+  // Every tool runs with its name, site id and org id prefix at hand, so a
+  // refusal's log line says which call it was (logToolError)
+  const registerTool = server.tool.bind(server) as (...params: unknown[]) => unknown;
+  server.tool = ((name: string, ...rest: unknown[]) => {
+    const handler = rest.pop() as (args: unknown, extra: { authInfo?: AuthInfo }) => unknown;
+    return registerTool(name, ...rest, (args: unknown, extra: { authInfo?: AuthInfo }) => {
+      const siteId = (args as { siteId?: unknown } | undefined)?.siteId;
+      const context: ToolCallContext = {
+        tool: name,
+        ...(typeof siteId === "string" && { siteId }),
+        orgIdPrefix: orgIdPrefix(extra?.authInfo?.token ?? process.env.HOSTSMITH_ACCESS_TOKEN),
+      };
+      return toolCall.run(context, () => handler(args, extra));
+    });
+  }) as typeof server.tool;
 
   server.tool(
     "list_sites",
