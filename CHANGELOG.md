@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v1.8.1 - 2026-11-23
+#### Bug Fixes
+- log every tool error with its status and code - (0d88615) - gp42-ops (GitHub)
+#### Documentation
+- send security reports to security@hostsmith.net - (1d88672) - gp42-ops (GitHub)
+#### Continuous Integration
+- read release credentials from the release environment - (60c7921) - gp42-ops (GitHub)
+
+- - -
+
 ## v1.8.0 - 2026-11-12
 #### Features
 - shorten the redirect host instructions - (7a6d7d2) - gp42-ops (GitHub)
